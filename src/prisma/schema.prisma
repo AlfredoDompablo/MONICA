@@ -1,0 +1,71 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+// src/prisma/schema.prisma
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  user_id       Int     @id @default(autoincrement())
+  full_name     String  @db.VarChar(100)
+  email         String  @unique @db.VarChar(100)
+  password_hash String  @db.VarChar(255)
+  role          String  @db.VarChar(20)
+  is_active     Boolean @default(true)
+  nodes         Node[]  @relation("UserToNodes")
+
+  @@map("users")
+}
+
+model Node {
+  node_id          String           @id @db.VarChar(20)
+  description      String           @db.VarChar(100)
+  latitude         Decimal          @db.Decimal(10, 8)
+  longitude        Decimal          @db.Decimal(11, 8)
+  last_seen        DateTime?        @db.Timestamp(6)
+  user_id          Int?
+  user             User?            @relation("UserToNodes", fields: [user_id], references: [user_id])
+  sensor_readings  SensorReading[]
+  waste_detections WasteDetection[]
+
+  @@map("nodes")
+}
+
+model SensorReading {
+  reading_id       Int      @id @default(autoincrement())
+  node_id          String   @db.VarChar(20)
+  timestamp        DateTime @default(now()) @db.Timestamp(6)
+  ph               Decimal? @db.Decimal(4, 2)
+  dissolved_oxygen Decimal? @db.Decimal(5, 2)
+  turbidity        Decimal? @db.Decimal(6, 2)
+  connectivity     Decimal? @db.Decimal(8, 2)
+  temperature      Decimal? @db.Decimal(5, 2)
+  battery_level    Decimal? @db.Decimal(4, 2)
+  node             Node     @relation(fields: [node_id], references: [node_id])
+
+  @@map("sensor_readings")
+}
+
+model WasteDetection {
+  detection_id     Int      @id @default(autoincrement())
+  node_id          String   @db.VarChar(20)
+  timestamp        DateTime @default(now()) @db.Timestamp(6)
+  coverage_percent Decimal? @db.Decimal(5, 2)
+  image_data       Bytes?
+  model_version    String?  @db.VarChar(50)
+  confidence       Decimal? @db.Decimal(3, 2)
+  node             Node     @relation(fields: [node_id], references: [node_id])
+
+  @@map("waste_detections")
+}
