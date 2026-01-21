@@ -1,12 +1,18 @@
 import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+const connectionString = `${process.env.DATABASE_URL}`;
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient };
 
-// En versiones recientes, no se usa un objeto anidado para la URL en el constructor
-// simplemente se deja que Prisma la tome del entorno o se pasa vía 'datasourceUrl'
+const pool = new Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+
 export const prisma =
   globalForPrisma.prisma ||
   new PrismaClient({
+    adapter,
     log: ['query', 'error', 'warn'],
   });
 
