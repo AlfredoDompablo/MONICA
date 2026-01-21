@@ -110,4 +110,3 @@ La aplicación expone los siguientes endpoints REST:
 *   **POST** `/api/waste-detections`: Registrar evento de detección (soporta imágenes en Base64).
 
 ---
-Desarrollado con ❤️ por el equipo de **WEB_MONICA**.
