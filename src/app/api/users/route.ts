@@ -1,17 +1,26 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import bcrypt from 'bcryptjs';
 
 // GET /api/users - Obtener todos los usuarios
 export async function GET() {
   try {
     const users = await prisma.user.findMany({
-      orderBy: { user_id: 'asc' }
+      orderBy: { user_id: 'asc' },
+      select: {
+        user_id: true,
+        full_name: true,
+        email: true,
+        role: true,
+        is_active: true,
+        // Exclude password_hash
+      }
     });
     return NextResponse.json(users);
   } catch (error) {
     console.error('Error fetching users:', error);
     return NextResponse.json(
-      { error: 'Error al obtener usuarios' },
+      { error: 'Error al obtener usuarios', details: String(error) },
       { status: 500 }
     );
   }
@@ -21,24 +30,38 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { full_name, email, password_hash, role, is_active } = body;
+    // Accept 'password' in body, or 'password_hash' if frontend sends it that way (but allow raw for hashing)
+    const { full_name, email, password, password_hash, role, is_active } = body;
+
+    // Determine the raw password to hash
+    const passwordRaw = password || password_hash;
 
     // Validación básica
-    if (!full_name || !email || !password_hash || !role) {
+    if (!full_name || !email || !passwordRaw || !role) {
       return NextResponse.json(
         { error: 'Faltan campos obligatorios' },
         { status: 400 }
       );
     }
 
+    // Hash password
+    const hashedPassword = await bcrypt.hash(passwordRaw, 10);
+
     const newUser = await prisma.user.create({
       data: {
         full_name,
         email,
-        password_hash,
+        password_hash: hashedPassword,
         role,
         is_active: is_active ?? true,
       },
+      select: {
+        user_id: true,
+        full_name: true,
+        email: true,
+        role: true,
+        is_active: true,
+      }
     });
 
     return NextResponse.json(newUser, { status: 201 });

@@ -72,7 +72,7 @@ export async function POST(request: Request) {
             data: {
                 node_id,
                 coverage_percent,
-                image_data: imageBuffer,
+                image_data: imageBuffer as any,
                 model_version,
                 confidence,
                 timestamp: new Date(),
