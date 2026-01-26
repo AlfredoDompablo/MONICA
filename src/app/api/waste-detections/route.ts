@@ -2,7 +2,15 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
 
-// GET /api/waste-detections - Listar detecciones (sin datos binarios pesados)
+/**
+ * GET /api/waste-detections
+ * 
+ * Lista las detecciones de residuos registradas.
+ * No incluye los datos binarios de la imagen para optimizar la transferencia.
+ * 
+ * @param {NextRequest} request - Filtros opcionales (node_id, limit).
+ * @returns {Promise<NextResponse>} Lista de detecciones (metadatos).
+ */
 export async function GET(request: NextRequest) {
     try {
         const searchParams = request.nextUrl.searchParams;
@@ -38,7 +46,15 @@ export async function GET(request: NextRequest) {
     }
 }
 
-// POST /api/waste-detections - Registrar nueva detección
+/**
+ * POST /api/waste-detections
+ * 
+ * Registra una nueva detección de residuos.
+ * Acepta la imagen en formato Base64 y la almacena como Buffer (bytes).
+ * 
+ * @param {Request} request - Metadatos de la detección y imagen en base64.
+ * @returns {Promise<NextResponse>} La detección creada (sin devolver la imagen).
+ */
 export async function POST(request: Request) {
     try {
         const body = await request.json();

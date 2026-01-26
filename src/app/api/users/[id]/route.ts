@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+/**
+ * GET /api/users/{id}
+ * 
+ * Obtiene los detalles de un usuario específico, incluyendo sus nodos asignados.
+ * 
+ * @param {Request} request - La petición HTTP.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - ID del usuario.
+ * @returns {Promise<NextResponse>} Detalles del usuario.
+ */
 export async function GET(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -29,6 +39,17 @@ export async function GET(
     }
 }
 
+/**
+ * PUT /api/users/{id}
+ * 
+ * Actualiza la información de un usuario.
+ * No permite modificar el ID del usuario.
+ * 
+ * @param {Request} request - Datos a actualizar.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - ID del usuario.
+ * @returns {Promise<NextResponse>} El usuario actualizado.
+ */
 export async function PUT(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -60,6 +81,16 @@ export async function PUT(
     }
 }
 
+/**
+ * DELETE /api/users/{id}
+ * 
+ * Realiza una eliminación lógica del usuario (lo marca como inactivo).
+ * 
+ * @param {Request} request - La petición HTTP.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - ID del usuario a desactivar.
+ * @returns {Promise<NextResponse>} Mensaje de confirmación.
+ */
 export async function DELETE(
     request: Request,
     { params }: { params: Promise<{ id: string }> }

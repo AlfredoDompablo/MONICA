@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+/**
+ * GET /api/nodes/{id}
+ * 
+ * Obtiene los detalles de un nodo específico por su ID.
+ * 
+ * @param {Request} request - La petición HTTP.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - Parámetros de la URL (id del nodo).
+ * @returns {Promise<NextResponse>} Detalles del nodo o error 404.
+ */
 export async function GET(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -27,6 +37,17 @@ export async function GET(
     }
 }
 
+/**
+ * PUT /api/nodes/{id}
+ * 
+ * Actualiza la información de un nodo existente.
+ * No permite modificar el ID del nodo.
+ * 
+ * @param {Request} request - La petición HTTP con los datos a actualizar.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - ID del nodo a actualizar.
+ * @returns {Promise<NextResponse>} El nodo actualizado.
+ */
 export async function PUT(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -54,6 +75,17 @@ export async function PUT(
     }
 }
 
+/**
+ * DELETE /api/nodes/{id}
+ * 
+ * Elimina un nodo del sistema.
+ * Puede fallar si existen registros asociados (lecturas) que dependen de este nodo.
+ * 
+ * @param {Request} request - La petición HTTP.
+ * @param {Object} context - Contexto de la ruta.
+ * @param {Promise<{ id: string }>} context.params - ID del nodo a eliminar.
+ * @returns {Promise<NextResponse>} Mensaje de confirmación.
+ */
 export async function DELETE(
     request: Request,
     { params }: { params: Promise<{ id: string }> }

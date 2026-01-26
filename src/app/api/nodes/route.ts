@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-// GET /api/nodes - Obtener todos los nodos
+/**
+ * GET /api/nodes
+ * 
+ * Recupera todos los nodos de monitoreo registrados.
+ * 
+ * @returns {Promise<NextResponse>} Lista de nodos ordenados por ID.
+ */
 export async function GET() {
     try {
         const nodes = await prisma.node.findMany({
@@ -17,7 +23,14 @@ export async function GET() {
     }
 }
 
-// POST /api/nodes - Registrar un nuevo nodo
+/**
+ * POST /api/nodes
+ * 
+ * Registra un nuevo nodo en el sistema.
+ * 
+ * @param {Request} request - Datos del nodo (id, descripción, ubicación).
+ * @returns {Promise<NextResponse>} El nodo creado o error si falla la validación.
+ */
 export async function POST(request: Request) {
     try {
         const body = await request.json();

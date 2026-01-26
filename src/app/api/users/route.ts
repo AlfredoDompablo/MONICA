@@ -2,7 +2,13 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 
-// GET /api/users - Obtener todos los usuarios
+/**
+ * GET /api/users
+ * 
+ * Recupera la lista de todos los usuarios registrados en el sistema.
+ * 
+ * @returns {Promise<NextResponse>} Respuesta JSON con el array de usuarios (sin incluir contraseñas).
+ */
 export async function GET() {
   try {
     const users = await prisma.user.findMany({
@@ -26,7 +32,15 @@ export async function GET() {
   }
 }
 
-// POST /api/users - Crear un nuevo usuario
+/**
+ * POST /api/users
+ * 
+ * Crea un nuevo usuario en el sistema.
+ * Valida los campos obligatorios y hashea la contraseña antes de guardarla.
+ * 
+ * @param {Request} request - La petición HTTP con los datos del usuario.
+ * @returns {Promise<NextResponse>} Respuesta JSON con el usuario creado o un mensaje de error.
+ */
 export async function POST(request: Request) {
   try {
     const body = await request.json();

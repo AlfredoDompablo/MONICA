@@ -1,0 +1,564 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Monica API",
+        "version": "1.0.0",
+        "description": "Documentación de la API del proyecto Monica."
+    },
+    "servers": [
+        {
+            "url": "http://localhost:3000",
+            "description": "Servidor de Desarrollo"
+        }
+    ],
+    "components": {
+        "schemas": {
+            "User": {
+                "type": "object",
+                "properties": {
+                    "user_id": {
+                        "type": "integer"
+                    },
+                    "full_name": {
+                        "type": "string"
+                    },
+                    "email": {
+                        "type": "string",
+                        "format": "email"
+                    },
+                    "role": {
+                        "type": "string"
+                    },
+                    "is_active": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "UserInput": {
+                "type": "object",
+                "required": [
+                    "full_name",
+                    "email",
+                    "password",
+                    "role"
+                ],
+                "properties": {
+                    "full_name": {
+                        "type": "string"
+                    },
+                    "email": {
+                        "type": "string",
+                        "format": "email"
+                    },
+                    "password": {
+                        "type": "string",
+                        "format": "password"
+                    },
+                    "role": {
+                        "type": "string"
+                    },
+                    "is_active": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "Node": {
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "latitude": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "longitude": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "last_seen": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "battery_level": {
+                        "type": "number"
+                    },
+                    "status": {
+                        "type": "string"
+                    }
+                }
+            },
+            "NodeInput": {
+                "type": "object",
+                "required": [
+                    "node_id",
+                    "description",
+                    "latitude",
+                    "longitude"
+                ],
+                "properties": {
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "latitude": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "longitude": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "user_id": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "SensorReading": {
+                "type": "object",
+                "properties": {
+                    "reading_id": {
+                        "type": "integer"
+                    },
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "timestamp": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "ph": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "dissolved_oxygen": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "turbidity": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "temperature": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "battery_level": {
+                        "type": "number",
+                        "format": "float"
+                    }
+                }
+            },
+            "SensorReadingInput": {
+                "type": "object",
+                "required": [
+                    "node_id"
+                ],
+                "properties": {
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "ph": {
+                        "type": "number"
+                    },
+                    "dissolved_oxygen": {
+                        "type": "number"
+                    },
+                    "turbidity": {
+                        "type": "number"
+                    },
+                    "temperature": {
+                        "type": "number"
+                    },
+                    "battery_level": {
+                        "type": "number"
+                    }
+                }
+            },
+            "WasteDetection": {
+                "type": "object",
+                "properties": {
+                    "detection_id": {
+                        "type": "integer"
+                    },
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "timestamp": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "coverage_percent": {
+                        "type": "number",
+                        "format": "float"
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "format": "float"
+                    }
+                }
+            },
+            "WasteDetectionInput": {
+                "type": "object",
+                "required": [
+                    "node_id"
+                ],
+                "properties": {
+                    "node_id": {
+                        "type": "string"
+                    },
+                    "coverage_percent": {
+                        "type": "number"
+                    },
+                    "image_data_base64": {
+                        "type": "string",
+                        "description": "Imagen en Base64"
+                    },
+                    "model_version": {
+                        "type": "string"
+                    },
+                    "confidence": {
+                        "type": "number"
+                    }
+                }
+            }
+        }
+    },
+    "paths": {
+        "/api/users": {
+            "get": {
+                "summary": "Obtener usuarios",
+                "responses": {
+                    "200": {
+                        "description": "Lista de usuarios",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/User"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Crear usuario",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UserInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Usuario creado"
+                    }
+                }
+            }
+        },
+        "/api/users/{id}": {
+            "get": {
+                "summary": "Obtener usuario por ID",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Detalles del usuario",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/User"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Usuario no encontrado"
+                    }
+                }
+            },
+            "put": {
+                "summary": "Actualizar usuario",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UserInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Usuario actualizado"
+                    }
+                }
+            },
+            "delete": {
+                "summary": "Desactivar usuario",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Usuario desactivado"
+                    }
+                }
+            }
+        },
+        "/api/nodes": {
+            "get": {
+                "summary": "Obtener nodos",
+                "responses": {
+                    "200": {
+                        "description": "Lista de nodos",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/Node"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Registrar nodo",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/NodeInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Nodo creado"
+                    }
+                }
+            }
+        },
+        "/api/nodes/{id}": {
+            "get": {
+                "summary": "Obtener nodo por ID",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Detalles del nodo",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Node"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Nodo no encontrado"
+                    }
+                }
+            },
+            "put": {
+                "summary": "Actualizar nodo",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/NodeInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Nodo actualizado"
+                    }
+                }
+            },
+            "delete": {
+                "summary": "Eliminar nodo",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Nodo eliminado"
+                    }
+                }
+            }
+        },
+        "/api/sensor-readings": {
+            "get": {
+                "summary": "Obtener lecturas",
+                "parameters": [
+                    {
+                        "name": "node_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Historial de lecturas",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/SensorReading"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Registrar lectura",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SensorReadingInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Lectura registrada"
+                    }
+                }
+            }
+        },
+        "/api/waste-detections": {
+            "get": {
+                "summary": "Obtener detecciones",
+                "parameters": [
+                    {
+                        "name": "node_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Lista de detecciones",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/WasteDetection"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Registrar detección",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/WasteDetectionInput"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Detección registrada"
+                    }
+                }
+            }
+        }
+    }
+}
