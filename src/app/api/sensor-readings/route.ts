@@ -2,8 +2,15 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
 
-// GET /api/sensor-readings - Listar lecturas
-// Parametros opcionales: node_id, limit, startDate, endDate
+/**
+ * GET /api/sensor-readings
+ * 
+ * Obtiene el historial de lecturas de sensores.
+ * Permite filtrar por nodo, rango de fechas y limitar resultados.
+ * 
+ * @param {NextRequest} request - Incluye parámetros de búsqueda (node_id, limit, startDate, endDate).
+ * @returns {Promise<NextResponse>} Lista de lecturas.
+ */
 export async function GET(request: NextRequest) {
     try {
         const searchParams = request.nextUrl.searchParams;
@@ -41,7 +48,15 @@ export async function GET(request: NextRequest) {
     }
 }
 
-// POST /api/sensor-readings - Registrar nueva lectura
+/**
+ * POST /api/sensor-readings
+ * 
+ * Registra una nueva lectura de sensores para un nodo específico.
+ * Actualiza automáticamente la fecha de 'última vista' del nodo.
+ * 
+ * @param {Request} request - Datos de los sensores (ph, temperatura, etc.).
+ * @returns {Promise<NextResponse>} La lectura creada.
+ */
 export async function POST(request: Request) {
     try {
         const body = await request.json();
@@ -79,7 +94,7 @@ export async function POST(request: Request) {
         await prisma.node.update({
             where: { node_id },
             data: { last_seen: new Date() }
-        }).catch(err => console.error('Error updating node last_seen:', err));
+        }).catch((err: any) => console.error('Error updating node last_seen:', err));
 
         return NextResponse.json(newReading, { status: 201 });
     } catch (error) {
