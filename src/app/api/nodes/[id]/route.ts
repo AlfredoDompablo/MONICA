@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { nodeSchema } from '@/lib/schemas';
+import { z } from 'zod';
 
 /**
  * GET /api/nodes/{id}
@@ -58,15 +62,29 @@ export async function PUT(
         const body = await request.json();
 
         // Evitar que actualicen el ID
-        delete body.node_id;
+        // Validate with Zod (partial because we might not update all fields, 
+        // though the modal sends all. Let's use partial just in case for flexibility)
+        // Actually, for a full PUT we often expect all, but let's allow partial updates for flexibility
+        // But wait, the schema has ID which we shouldn't update.
+        // Let's omit ID from the schema validation for updates
+        const updateSchema = nodeSchema.omit({ node_id: true }).partial();
+
+        const { description, latitude, longitude } = updateSchema.parse(body);
 
         const updatedNode = await prisma.node.update({
             where: { node_id: nodeId },
-            data: body,
+            data: {
+                description,
+                latitude,
+                longitude,
+            },
         });
 
         return NextResponse.json(updatedNode);
     } catch (error) {
+        if (error instanceof z.ZodError) {
+            return NextResponse.json({ error: error.issues }, { status: 400 });
+        }
         console.error('Error updating node:', error);
         if ((error as any).code === 'P2025') {
             return NextResponse.json({ error: 'Nodo no encontrado' }, { status: 404 });

@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { nodeSchema } from '@/lib/schemas';
+import { z } from 'zod';
 /**
  * GET /api/nodes
  * 
@@ -12,7 +15,14 @@ export async function GET() {
     try {
         const nodes = await prisma.node.findMany({
             orderBy: { node_id: 'asc' },
+            include: {
+                sensor_readings: {
+                    take: 1,
+                    orderBy: { timestamp: 'desc' }
+                }
+            }
         });
+
         return NextResponse.json(nodes);
     } catch (error) {
         console.error('Error fetching nodes:', error);
@@ -34,11 +44,17 @@ export async function GET() {
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { node_id, description, latitude, longitude, user_id } = body;
 
-        if (!node_id || !description || latitude === undefined || longitude === undefined) {
+        // Validate with Zod
+        const { node_id, description, latitude, longitude, user_id } = nodeSchema.parse(body);
+
+        const existingNode = await prisma.node.findUnique({
+            where: { node_id },
+        });
+
+        if (existingNode) {
             return NextResponse.json(
-                { error: 'Faltan campos obligatorios' },
+                { error: 'Node ID already exists' },
                 { status: 400 }
             );
         }
@@ -49,13 +65,16 @@ export async function POST(request: Request) {
                 description,
                 latitude,
                 longitude,
-                user_id: user_id || null,
-                last_seen: new Date(),
+                user_id: user_id || null, // Keep user_id if provided, otherwise null
+                last_seen: new Date(), // Keep last_seen as it's a useful field
             },
         });
 
         return NextResponse.json(newNode, { status: 201 });
     } catch (error) {
+        if (error instanceof z.ZodError) {
+            return NextResponse.json({ error: error.issues }, { status: 400 });
+        }
         console.error('Error creating node:', error);
         if (String(error).includes('Unique constraint')) {
             return NextResponse.json(

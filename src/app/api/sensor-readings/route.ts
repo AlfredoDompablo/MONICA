@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
+import { sensorReadingSchema } from '@/lib/schemas';
+import { z } from 'zod';
 
 /**
  * GET /api/sensor-readings
@@ -68,14 +70,11 @@ export async function POST(request: Request) {
             connectivity,
             temperature,
             battery_level
-        } = body;
+        } = sensorReadingSchema.parse(body);
 
-        if (!node_id) {
-            return NextResponse.json(
-                { error: 'El ID del nodo es obligatorio' },
-                { status: 400 }
-            );
-        }
+        // Check if node exists shouldn't be needed if FK constraint exists, but nice to have.
+        // Actually Zod only checks TYPES.
+        // We can keep the node_id check if we want, but schema requires it min(1).
 
         const newReading = await prisma.sensorReading.create({
             data: {
@@ -99,6 +98,9 @@ export async function POST(request: Request) {
         return NextResponse.json(newReading, { status: 201 });
     } catch (error) {
         console.error('Error creating sensor reading:', error);
+        if (error instanceof z.ZodError) {
+            return NextResponse.json({ error: error.issues }, { status: 400 });
+        }
         if ((error as any).code === 'P2003') { // Foreign key constraint failed
             return NextResponse.json({ error: 'El nodo especificado no existe' }, { status: 400 });
         }
