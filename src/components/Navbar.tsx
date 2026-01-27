@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
@@ -17,27 +17,65 @@ import { usePathname } from 'next/navigation';
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const [activeSection, setActiveSection] = useState('inicio');
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const sections = ['inicio', 'mapa'];
+      const scrollPosition = window.scrollY + 100; // Offset for navbar
+
+      for (const section of sections) {
+        const element = document.getElementById(section);
+        if (element) {
+          const offsetTop = element.offsetTop;
+          const offsetBottom = offsetTop + element.offsetHeight;
+
+          if (scrollPosition >= offsetTop && scrollPosition < offsetBottom) {
+            setActiveSection(section);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    
+    // Check initial position
+    handleScroll();
+    
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   /**
    * Lista de enlaces de navegación.
-   * Cada objeto contiene el nombre visible y la ruta (href).
+   * Cada objeto contiene el nombre visible, la ruta (href) y el ID de sección asociado.
    */
   const links = [
-    { name: 'Inicio', href: '/' },
-    { name: 'Mapa', href: '/mapa' },
-    { name: 'Estadísticas', href: '/estadisticas' },
-    { name: 'Galería', href: '/galeria' },
-    { name: 'Nosotros', href: '/nosotros' },
+    { name: 'Inicio', href: '/', sectionId: 'inicio' },
+    { name: 'Mapa', href: '/#mapa', sectionId: 'mapa' },
+    { name: 'Estadísticas', href: '/estadisticas', sectionId: 'estadisticas' },
+    { name: 'Galería', href: '/galeria', sectionId: 'galeria' },
+    { name: 'Nosotros', href: '/nosotros', sectionId: 'nosotros' },
   ];
 
+  /* Do not render Navbar on login page or dashboard */
+  if (pathname?.startsWith('/admin/login') || pathname?.startsWith('/dashboard')) {
+      return null;
+  }
+
+  const isLinkActive = (sectionId: string) => {
+    return activeSection === sectionId;
+  };
+
   return (
-    <nav className="bg-[#f8f8f8] backdrop-blur-md shadow-sm fixed w-full z-50 transition-all duration-300">
+    <nav className="bg-[#f8f8f8] backdrop-blur-md shadow-sm fixed top-0 w-full z-50 transition-all duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
+        <div className="flex justify-between h-20">
           {/* Logo Section */}
           <div className="flex-shrink-0 flex items-center">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="relative h-16 w-40">
+            <Link href="/" className="flex items-center gap-2" onClick={() => setActiveSection('inicio')}>
+              <div className="relative h-20 w-48">
                  <Image
                   src="/LogoMonica.svg"
                   alt="Logo Monica"
@@ -52,11 +90,12 @@ export default function Navbar() {
           {/* Desktop Menu */}
           <div className="hidden md:flex md:items-center md:space-x-8">
             {links.map((link) => {
-              const isActive = pathname === link.href;
+              const isActive = isLinkActive(link.sectionId);
               return (
                 <Link
                   key={link.name}
                   href={link.href}
+                  onClick={() => setActiveSection(link.sectionId)}
                   className={`relative px-3 py-2 text-sm font-medium transition-colors duration-200 
                     ${isActive ? 'text-[#1e3570]' : 'text-gray-600 hover:text-[#1e3570]'}
                     group
@@ -97,12 +136,15 @@ export default function Navbar() {
       <div className={`md:hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-64 opacity-100 shadow-md' : 'max-h-0 opacity-0 overflow-hidden'}`}>
         <div className="px-2 pt-2 pb-3 space-y-1 bg-[#f8f8f8] sm:px-3">
           {links.map((link) => {
-             const isActive = pathname === link.href;
+             const isActive = isLinkActive(link.sectionId);
              return (
               <Link
                 key={link.name}
                 href={link.href}
-                onClick={() => setIsOpen(false)}
+                onClick={() => {
+                   setIsOpen(false);
+                   setActiveSection(link.sectionId);
+                }}
                 className={`block px-3 py-2 rounded-md text-base font-medium transition-colors
                   ${isActive ? 'text-[#1e3570] bg-[#1e3570]/10' : 'text-gray-600 hover:text-[#1e3570] hover:bg-gray-50'}
                 `}
