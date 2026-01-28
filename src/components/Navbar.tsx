@@ -24,7 +24,7 @@ export default function Navbar() {
   useEffect(() => {
     const handleScroll = () => {
       const sections = ['inicio', 'mapa', 'estadisticas', 'galeria', 'nosotros'];
-      const scrollPosition = window.scrollY + 100; // Offset for navbar
+      const scrollPosition = window.scrollY + 100; // Compensación para la barra de navegación
 
       for (const section of sections) {
         const element = document.getElementById(section);
@@ -41,7 +41,7 @@ export default function Navbar() {
 
     window.addEventListener('scroll', handleScroll);
     
-    // Check initial position
+    // Verificar posición inicial
     handleScroll();
     
     return () => window.removeEventListener('scroll', handleScroll);
@@ -59,7 +59,7 @@ export default function Navbar() {
     { name: 'Nosotros', href: '/nosotros', sectionId: 'nosotros' },
   ];
 
-  /* Do not render Navbar on login page or dashboard */
+  /* No renderizar Navbar en página de login o dashboard */
   if (pathname?.startsWith('/admin/login') || pathname?.startsWith('/dashboard')) {
       return null;
   }
@@ -72,7 +72,7 @@ export default function Navbar() {
     <nav className="bg-[#f8f8f8] backdrop-blur-md shadow-sm fixed top-0 w-full z-50 transition-all duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-20">
-          {/* Logo Section */}
+          {/* Sección de Logo */}
           <div className="flex-shrink-0 flex items-center">
             <Link href="/" className="flex items-center gap-2" onClick={() => setActiveSection('inicio')}>
               <div className="relative h-20 w-48">

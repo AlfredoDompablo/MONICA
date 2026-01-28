@@ -8,23 +8,28 @@ import fs from 'fs';
 const envPath = path.resolve(process.cwd(), '.env');
 dotenv.config({ path: envPath });
 
-// Fallback: manually read if dotenv failed but file exists
+// Fallback: lectura manual si dotenv falla pero el archivo existe
 if (!process.env.DATABASE_URL && fs.existsSync(envPath)) {
     const envContent = fs.readFileSync(envPath, 'utf-8');
     const match = envContent.match(/DATABASE_URL=["']?(.*?)["']?$/m);
     if (match) process.env.DATABASE_URL = match[1];
 }
 
+/**
+ * Script de Verificación de Semilla
+ * Consulta la base de datos para confirmar que los datos se han insertado correctamente.
+ * Muestra conteos de registros y una muestra de los datos.
+ */
 async function main() {
-    // Import prisma instance dynamically
+    // Importar instancia de prisma dinámicamente
     const { prisma } = await import('../lib/prisma');
 
     try {
         const nodeCount = await prisma.node.count();
         const readingCount = await prisma.sensorReading.count();
 
-        console.log(`Nodes: ${nodeCount}`);
-        console.log(`SensorReadings: ${readingCount}`);
+        console.log(`Nodos: ${nodeCount}`);
+        console.log(`Lecturas de Sensor: ${readingCount}`);
 
         const readings = await prisma.sensorReading.findMany({
             take: 5,

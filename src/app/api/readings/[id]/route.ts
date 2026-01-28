@@ -5,6 +5,16 @@ import { authOptions } from '@/lib/auth';
 import { readingUpdateSchema } from '@/lib/schemas';
 import { z } from 'zod';
 
+/**
+ * PUT /api/readings/{id}
+ * 
+ * Actualiza una lectura específica.
+ * Requiere autenticación de administrador.
+ * 
+ * @param {Request} request - Cuerpo con datos a actualizar (ph, temp, etc).
+ * @param {Object} context - Contexto con ID de lectura.
+ * @returns {Promise<NextResponse>} Lectura actualizada.
+ */
 export async function PUT(
     request: Request,
     { params }: { params: { id: string } }
@@ -19,12 +29,12 @@ export async function PUT(
         const id = parseInt(params.id);
         const body = await request.json();
 
-        // Validate that id is a number
+        // Validar que el ID sea numérico
         if (isNaN(id)) {
-            return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
+            return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
         }
 
-        // Extract fields relative to sensor readings
+        // Extraer campos relativos a lecturas de sensores
         const {
             ph,
             dissolved_oxygen,
@@ -53,12 +63,22 @@ export async function PUT(
         }
         console.error('Error updating reading:', error);
         return NextResponse.json(
-            { error: 'Error updating reading' },
+            { error: 'Error actualizando lectura' },
             { status: 500 }
         );
     }
 }
 
+/**
+ * DELETE /api/readings/{id}
+ * 
+ * Elimina permanentemente una lectura.
+ * Requiere autenticación de administrador.
+ * 
+ * @param {Request} request - Petición HTTP.
+ * @param {Object} context - Contexto con ID de lectura.
+ * @returns {Promise<NextResponse>} Mensaje de éxito.
+ */
 export async function DELETE(
     request: Request,
     { params }: { params: { id: string } }
@@ -73,18 +93,18 @@ export async function DELETE(
         const id = parseInt(params.id);
 
         if (isNaN(id)) {
-            return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
+            return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
         }
 
         await prisma.sensorReading.delete({
             where: { reading_id: id },
         });
 
-        return NextResponse.json({ message: 'Reading deleted successfully' });
+        return NextResponse.json({ message: 'Lectura eliminada exitosamente' });
     } catch (error) {
         console.error('Error deleting reading:', error);
         return NextResponse.json(
-            { error: 'Error deleting reading' },
+            { error: 'Error eliminando lectura' },
             { status: 500 }
         );
     }

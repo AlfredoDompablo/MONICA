@@ -13,6 +13,15 @@ interface Node {
     last_seen?: string;
 }
 
+/**
+ * Página de Gestión de Nodos
+ * 
+ * Permite a los administradores:
+ * - Listar todos los nodos registrados.
+ * - Agregar nuevos nodos.
+ * - Editar la ubicación y descripción de nodos existentes.
+ * - Eliminar nodos.
+ */
 export default function NodesPage() {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [isLoading, setIsLoading] = useState(true);

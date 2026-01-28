@@ -8,12 +8,21 @@ interface ReadingModalProps {
   reading: any;
 }
 
+/**
+ * Componente ReadingModal
+ * 
+ * Ventana modal para la edición de lecturas de sensores.
+ * Permite modificar manualmente los valores de parámetros físicos (pH, temperatura, etc.)
+ * y la batería, validando los límites permitidos antes de guardar.
+ * 
+ * @param {ReadingModalProps} props - Propiedades del modal.
+ */
 export default function ReadingModal({ isOpen, onClose, onSave, reading }: ReadingModalProps) {
   const [formData, setFormData] = useState<any>({
     ph: '',
     dissolved_oxygen: '',
     turbidity: '',
-    conductivity: '', // Internal state uses correct term
+    conductivity: '', // El estado interno usa el término correcto
     temperature: '',
     battery_level: ''
   });
@@ -25,7 +34,7 @@ export default function ReadingModal({ isOpen, onClose, onSave, reading }: Readi
         ph: reading.ph ?? '',
         dissolved_oxygen: reading.dissolved_oxygen ?? '',
         turbidity: reading.turbidity ?? '',
-        conductivity: reading.conductivity ?? '', // Direct map now
+        conductivity: reading.conductivity ?? '', // Mapeo directo ahora
         temperature: reading.temperature ?? '',
         battery_level: reading.battery_level ?? ''
       });

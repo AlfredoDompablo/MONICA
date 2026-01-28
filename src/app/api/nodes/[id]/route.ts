@@ -61,12 +61,12 @@ export async function PUT(
         const nodeId = id;
         const body = await request.json();
 
+        // (The first part is already translated mostly, focusing on comments)
+        // ... (Lines 1-64) ...
+
         // Evitar que actualicen el ID
-        // Validate with Zod (partial because we might not update all fields, 
-        // though the modal sends all. Let's use partial just in case for flexibility)
-        // Actually, for a full PUT we often expect all, but let's allow partial updates for flexibility
-        // But wait, the schema has ID which we shouldn't update.
-        // Let's omit ID from the schema validation for updates
+        // Validar con Zod (parcial para permitir actualizaciones selectivas)
+        // Omitimos el ID del esquema ya que no se debe modificar
         const updateSchema = nodeSchema.omit({ node_id: true }).partial();
 
         const { description, latitude, longitude } = updateSchema.parse(body);

@@ -3,19 +3,23 @@ import bcrypt from 'bcryptjs';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import dotenv from 'dotenv';
-
 import path from 'path';
 
-// Load environment variables from .env file at the root of app-web
+// Cargar variables de entorno desde el archivo .env en la raíz de app-web
 const envPath = path.resolve(__dirname, '../../.env');
 dotenv.config({ path: envPath });
 
 const connectionString = `${process.env.DATABASE_URL}`;
 
+// Configuración del cliente Prisma con driver nativo de PG (necesario para Edge/Serverless)
 const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
+/**
+ * Script de Semilla (Seeding)
+ * Inicializa la base de datos con un usuario administrador predeterminado si no existe.
+ */
 async function main() {
     const email = 'admin@admin.com';
     const password = 'adminpassword';
@@ -25,10 +29,11 @@ async function main() {
     });
 
     if (existingUser) {
-        console.log(`User ${email} already exists.`);
+        console.log(`El usuario ${email} ya existe.`);
         return;
     }
 
+    // Hashear contraseña antes de guardar
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
@@ -41,8 +46,8 @@ async function main() {
         },
     });
 
-    console.log(`Admin user created: ${user.email}`);
-    console.log(`Password: ${password}`);
+    console.log(`Usuario admin creado: ${user.email}`);
+    console.log(`Contraseña: ${password}`);
 }
 
 main()

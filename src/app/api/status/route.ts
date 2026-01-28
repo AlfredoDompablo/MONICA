@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+/**
+ * GET /api/status
+ * 
+ * Endpoint de monitoreo de salud (Health Check).
+ * Verifica la conectividad con la base de datos realizando una consulta ligera.
+ * 
+ * @returns {Promise<NextResponse>} Estado de la conexión y conteo de usuarios.
+ */
 export async function GET() {
     try {
         // Intentamos hacer una consulta simple para verificar conexión

@@ -20,7 +20,7 @@ const defaultIcon = L.icon({
     shadowSize: [41, 41]
 });
 
-// Custom Icon for Sensors
+// Icono personalizado para Sensores
 const sensorIcon = L.divIcon({
     className: 'custom-div-icon',
     html: `<div style="background-color: #1e3570; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 3px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"></div>`,
@@ -44,6 +44,15 @@ interface MapProps {
     showDetails?: boolean;
 }
 
+/**
+ * Componente MapComponent
+ * 
+ * Mapa interactivo basado en Leaflet para visualizar la ubicación de los nodos de sensores.
+ * Muestra marcadores con popups informativos que incluyen estado, batería y opción para ver estadísticas.
+ * 
+ * @param {boolean} showDetails - Si es true, muestra detalles adicionales como batería en el popup.
+ * @returns {JSX.Element} Mapa renderizado.
+ */
 const MapComponent = ({ showDetails = false }: MapProps) => {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [loading, setLoading] = useState(true);
@@ -85,7 +94,7 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
         fetchNodes();
     }, []);
 
-    // Center on Rio Magdalena (approximate central point or first node)
+    // Centrar en Río Magdalena (punto central aproximado o primer nodo)
     const centerPosition: [number, number] = [19.3508, -99.1783]; 
 
     if (loading) {

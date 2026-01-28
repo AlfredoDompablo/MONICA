@@ -72,9 +72,8 @@ export async function POST(request: Request) {
             battery_level
         } = sensorReadingSchema.parse(body);
 
-        // Check if node exists shouldn't be needed if FK constraint exists, but nice to have.
-        // Actually Zod only checks TYPES.
-        // We can keep the node_id check if we want, but schema requires it min(1).
+        // Verificar si el nodo existe no es estrictamente necesario con FK, pero es bueno tenerlo.
+        // Zod solo verifica TIPOS.
 
         const newReading = await prisma.sensorReading.create({
             data: {

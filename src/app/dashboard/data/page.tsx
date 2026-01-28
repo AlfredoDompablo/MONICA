@@ -26,9 +26,18 @@ interface Node {
   description: string;
 }
 
+/**
+ * Página de Datos de Sensores
+ * 
+ * Visualización tabular y filtrable de todas las lecturas históricas.
+ * Funcionalidades:
+ * - Filtrado por nodo y rango de fechas.
+ * - Edición y eliminación de lecturas individuales (Corrección de datos).
+ * - Paginación controlada por el servidor.
+ */
 export default function ReadingsPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
+    const { data: session, status } = useSession();
+    const router = useRouter();
   
   const [readings, setReadings] = useState<SensorReading[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);

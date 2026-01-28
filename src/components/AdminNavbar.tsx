@@ -4,7 +4,16 @@ import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import Image from 'next/image';
 
+/**
+ * Componente AdminNavbar
+ * 
+ * Barra de navegación superior exclusiva para usuarios autenticados con rol de administrador.
+ * Proporciona acceso rápido a las secciones de gestión del dashboard y permite cerrar sesión.
+ * 
+ * @returns {JSX.Element} Elemento JSX que renderiza la barra de navegación administrativa.
+ */
 export default function AdminNavbar() {
+    // Obtener sesión actual para mostrar nombre de usuario
     const { data: session } = useSession();
 
     return (

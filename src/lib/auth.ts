@@ -3,7 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 
-// Extend built-in types
+// Extender tipos incorporados para soportar roles e IDs personalizados
 declare module "next-auth" {
     interface Session {
         user: {
@@ -24,16 +24,25 @@ declare module "next-auth/jwt" {
     }
 }
 
+/**
+ * Configuración de Autenticación para NextAuth.js.
+ * 
+ * Define la estrategia de autenticación (JWT) y el proveedor de credenciales.
+ * Utiliza Prisma para verificar credenciales contra la base de datos PostgreSQL
+ * y bcrypt para comparar hashes de contraseñas de forma segura.
+ * 
+ * Los callbacks aseguran que el ID y Rol del usuario persistan en el token y la sesión.
+ */
 export const authOptions: NextAuthOptions = {
     session: {
         strategy: "jwt",
     },
     providers: [
         CredentialsProvider({
-            name: "Credentials",
+            name: "Credenciales", // Nombre mostrado en UI por defecto (aunque usamos form custom)
             credentials: {
                 email: { label: "Email", type: "email" },
-                password: { label: "Password", type: "password" },
+                password: { label: "Contraseña", type: "password" },
             },
             async authorize(credentials) {
                 if (!credentials?.email || !credentials?.password) {
@@ -48,7 +57,7 @@ export const authOptions: NextAuthOptions = {
                     return null;
                 }
 
-                // Verify password
+                // Verificar contraseña
                 const isPasswordValid = await bcrypt.compare(
                     credentials.password,
                     user.password_hash
@@ -58,7 +67,7 @@ export const authOptions: NextAuthOptions = {
                     return null;
                 }
 
-                // Return user object (mapped to User interface)
+                // Retornar objeto de usuario (mapeado a la interfaz User extendida)
                 return {
                     id: String(user.user_id),
                     name: user.full_name,

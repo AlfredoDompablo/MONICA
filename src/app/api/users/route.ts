@@ -19,7 +19,7 @@ export async function GET() {
         email: true,
         role: true,
         is_active: true,
-        // Exclude password_hash
+        // Excluir password_hash
       }
     });
     return NextResponse.json(users);
@@ -43,14 +43,6 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    // Accept 'password' in body, or 'password_hash' if frontend sends it that way (but allow raw for hashing)
-    const { full_name, email, password, password_hash, role, is_active } = body;
-
-    // Determine the raw password to hash
-    const passwordRaw = password || password_hash;
-
-    // Validación básica
     if (!full_name || !email || !passwordRaw || !role) {
       return NextResponse.json(
         { error: 'Faltan campos obligatorios' },

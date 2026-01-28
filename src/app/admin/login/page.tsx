@@ -5,6 +5,12 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 
+/**
+ * Página de Inicio de Sesión
+ * 
+ * Formulario de autenticación para administradores.
+ * Utiliza NextAuth 'credentials' provider para validar usuario/contraseña.
+ */
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

@@ -1,48 +1,52 @@
-
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
-// Load environment variables from .env file at the root of app-web
+// Cargar variables de entorno desde el archivo .env en la raíz de app-web
 const envPath = path.resolve(__dirname, '../../.env');
 console.log('CWD:', process.cwd());
-console.log('Env Path:', envPath);
-console.log('Env Exists:', fs.existsSync(envPath));
+console.log('Ruta Env:', envPath);
+console.log('Env Existe:', fs.existsSync(envPath));
 
 const result = dotenv.config({ path: envPath });
 if (result.error) {
-    console.error('Dotenv error:', result.error);
+    console.error('Error Dotenv:', result.error);
 }
 
-// Fallback: manually read if dotenv failed but file exists
+// Fallback: lectura manual si dotenv falla pero el archivo existe
 if (!process.env.DATABASE_URL && fs.existsSync(envPath)) {
-    console.log('Manual fallback for .env parsing...');
+    console.log('Fallback manual para análisis de .env...');
     const envContent = fs.readFileSync(envPath, 'utf-8');
     const match = envContent.match(/DATABASE_URL=["']?(.*?)["']?$/m);
     if (match) {
         process.env.DATABASE_URL = match[1];
-        console.log('Manually Set DATABASE_URL');
+        console.log('DATABASE_URL Establecida Manualmente');
     }
 }
 
+/**
+ * Script de Semilla desde CSV
+ * Lee datos históricos desde un archivo CSV y puebla la base de datos.
+ * Crea nodos predeterminados si no existen y asigna lecturas a estos nodos secuencialmente.
+ */
 async function main() {
-    console.log('Starting CSV seed...');
-    console.log('Database URL available:', !!process.env.DATABASE_URL);
+    console.log('Iniciando carga de semilla CSV...');
+    console.log('URL de Base de Datos disponible:', !!process.env.DATABASE_URL);
 
     if (!process.env.DATABASE_URL) {
-        throw new Error('DATABASE_URL is missing');
+        throw new Error('Falta DATABASE_URL');
     }
 
-    // Import prisma instance dynamically to ensure env vars are loaded first
+    // Importar instancia de prisma dinámicamente para asegurar carga de variables de entorno primero
     const { prisma } = await import('../lib/prisma');
 
     try {
-        // 1. Ensure 4 nodes exist
+        // 1. Asegurar que existan 4 nodos
         const nodes = [
-            { node_id: 'NODE_001', description: 'Sensor Node 1', latitude: 19.4326, longitude: -99.1332 },
-            { node_id: 'NODE_002', description: 'Sensor Node 2', latitude: 19.4340, longitude: -99.1350 },
-            { node_id: 'NODE_003', description: 'Sensor Node 3', latitude: 19.4355, longitude: -99.1375 },
-            { node_id: 'NODE_004', description: 'Sensor Node 4', latitude: 19.4370, longitude: -99.1390 },
+            { node_id: 'NODE_001', description: 'Sensor Nodo 1', latitude: 19.4326, longitude: -99.1332 },
+            { node_id: 'NODE_002', description: 'Sensor Nodo 2', latitude: 19.4340, longitude: -99.1350 },
+            { node_id: 'NODE_003', description: 'Sensor Nodo 3', latitude: 19.4355, longitude: -99.1375 },
+            { node_id: 'NODE_004', description: 'Sensor Nodo 4', latitude: 19.4370, longitude: -99.1390 },
         ];
 
         for (const node of nodes) {
@@ -58,13 +62,13 @@ async function main() {
                 },
             });
         }
-        console.log('Ensured 4 nodes exist.');
+        console.log('Se aseguraron 4 nodos existentes.');
 
-        // 2. Read and parse CSV
+        // 2. Leer y parsear CSV
         const csvPath = '/home/oscar/PT2-Web/web/datos_Cuauhtemoc.csv';
 
         if (!fs.existsSync(csvPath)) {
-            console.error(`CSV file not found at ${csvPath}`);
+            console.error(`Archivo CSV no encontrado en ${csvPath}`);
             return;
         }
 
@@ -72,10 +76,11 @@ async function main() {
         const lines = fileContent.split('\n').filter(line => line.trim() !== '');
 
         const parseLine = (line: string) => {
-            // Regex for CSV splitting handling quotes
+            // Regex para separar CSV manejando comillas
             return line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(s => s.trim().replace(/^"|"$/g, '').replace(',', '.'));
         };
 
+        // Fecha de inicio simulada
         let startDate = new Date('2024-01-01T08:00:00Z');
         const oneWeek = 7 * 24 * 60 * 60 * 1000;
 
@@ -84,8 +89,7 @@ async function main() {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             const cols = parseLine(line);
-            // DLZAC2591M1 is 11 chars. If col 0 is DLZ..., it's data.
-            // But verify length.
+            // Verificar longitud válida de columnas para filtrar encabezados o líneas corruptas
             if (cols.length < 10) continue;
 
             const conductivity = parseFloat(cols[5]) || 0;
@@ -97,6 +101,7 @@ async function main() {
             const nodeIndex = i % 4;
             const nodeId = nodes[nodeIndex].node_id;
 
+            // Distribuir lecturas en el tiempo (1 semana entre bloques de lecturas)
             const weekIndex = Math.floor(i / 4);
             const currentDate = new Date(startDate.getTime() + (weekIndex * oneWeek));
 
@@ -117,7 +122,7 @@ async function main() {
             recordsCreated++;
             if (recordsCreated % 100 === 0) process.stdout.write('.');
         }
-        console.log(`\nFinished seeding. Created ${recordsCreated} sensor readings.`);
+        console.log(`\nSemilla finalizada. Se crearon ${recordsCreated} lecturas de sensores.`);
 
     } finally {
         await prisma.$disconnect();

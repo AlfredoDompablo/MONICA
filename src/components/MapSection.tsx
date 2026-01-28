@@ -7,6 +7,14 @@ const Map = dynamic(() => import('@/components/Map'), {
     loading: () => <div className="h-full w-full flex items-center justify-center bg-gray-100 rounded-xl animate-pulse">Cargando mapa interactivo...</div>
 });
 
+/**
+ * Componente MapSection
+ * 
+ * Sección de la página de inicio que presenta el mapa interactivo de monitoreo.
+ * Sirve como contenedor visual para el componente `Map` cargado dinámicamente.
+ * 
+ * @returns {JSX.Element} Sección del mapa.
+ */
 const MapSection = () => {
     return (
         <section id="mapa" className="w-full py-20 px-4 bg-gray-50">

@@ -15,55 +15,66 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Modelo de Usuario
+/// Representa a los usuarios del sistema, incluyendo administradores y operadores.
+/// Almacena credenciales de acceso y roles para la gestión de permisos.
 model User {
-  user_id       Int     @id @default(autoincrement())
-  full_name     String  @db.VarChar(100)
-  email         String  @unique @db.VarChar(100)
-  password_hash String  @db.VarChar(255)
-  role          String  @db.VarChar(20)
-  is_active     Boolean @default(true)
-  nodes         Node[]  @relation("UserToNodes")
+  user_id       Int     @id @default(autoincrement()) /// Identificador único del usuario
+  full_name     String  @db.VarChar(100) /// Nombre completo (ej. Juan Pérez)
+  email         String  @unique @db.VarChar(100) /// Correo electrónico único para inicio de sesión
+  password_hash String  @db.VarChar(255) /// Hash de la contraseña (bcrypt/argon2)
+  role          String  @db.VarChar(20) /// Rol del usuario (ej. 'admin', 'viewer')
+  is_active     Boolean @default(true) /// Estado de la cuenta (true = activa)
+  nodes         Node[]  @relation("UserToNodes") /// Nodos asociados o gestionados por este usuario
 
   @@map("users")
 }
 
+/// Modelo de Nodo
+/// Representa una estación de monitoreo físico o punto de recolección de datos.
+/// Contiene información geográfica y metadatos de la ubicación.
 model Node {
-  node_id          String           @id @db.VarChar(20)
-  description      String           @db.VarChar(100)
-  latitude         Decimal          @db.Decimal(10, 8)
-  longitude        Decimal          @db.Decimal(11, 8)
-  last_seen        DateTime?        @db.Timestamp(6)
-  user_id          Int?
+  node_id          String           @id @db.VarChar(20) /// ID alfanumérico único del nodo (ej. 'NODO-01')
+  description      String           @db.VarChar(100) /// Descripción legible o ubicación (ej. 'Puente Norte')
+  latitude         Decimal          @db.Decimal(10, 8) /// Latitud geográfica
+  longitude        Decimal          @db.Decimal(11, 8) /// Longitud geográfica
+  last_seen        DateTime?        @db.Timestamp(6) /// Última vez que el nodo reportó actividad
+  user_id          Int? /// ID del usuario responsable (opcional)
   user             User?            @relation("UserToNodes", fields: [user_id], references: [user_id])
-  sensor_readings  SensorReading[]
-  waste_detections WasteDetection[]
+  sensor_readings  SensorReading[] /// Historial de lecturas de sensores
+  waste_detections WasteDetection[] /// Historial de detecciones de residuos
 
   @@map("nodes")
 }
 
+/// Modelo de Lectura de Sensores
+/// Almacena los datos telemétricos enviados por los nodos en un momento específico.
+/// Registra parámetros de calidad del agua y estado del dispositivo.
 model SensorReading {
-  reading_id       Int      @id @default(autoincrement())
-  node_id          String   @db.VarChar(20)
-  timestamp        DateTime @default(now()) @db.Timestamp(6)
-  ph               Decimal? @db.Decimal(4, 2)
-  dissolved_oxygen Decimal? @db.Decimal(5, 2)
-  turbidity        Decimal? @db.Decimal(6, 2)
-  conductivity     Decimal? @db.Decimal(8, 2)
-  temperature      Decimal? @db.Decimal(5, 2)
-  battery_level    Decimal? @db.Decimal(4, 2)
+  reading_id       Int      @id @default(autoincrement()) /// Identificador único de la lectura
+  node_id          String   @db.VarChar(20) /// ID del nodo que generó la lectura
+  timestamp        DateTime @default(now()) @db.Timestamp(6) /// Fecha y hora de la lectura
+  ph               Decimal? @db.Decimal(4, 2) /// Potencial de Hidrógeno (0-14)
+  dissolved_oxygen Decimal? @db.Decimal(5, 2) /// Oxígeno Disuelto (mg/L)
+  turbidity        Decimal? @db.Decimal(6, 2) /// Turbidez (NTU/UNT)
+  conductivity     Decimal? @db.Decimal(8, 2) /// Conductividad Eléctrica (µS/cm)
+  temperature      Decimal? @db.Decimal(5, 2) /// Temperatura del agua (°C)
+  battery_level    Decimal? @db.Decimal(4, 2) /// Nivel de batería del nodo (%)
   node             Node     @relation(fields: [node_id], references: [node_id])
 
   @@map("sensor_readings")
 }
 
+/// Modelo de Detección de Residuos
+/// Registra eventos de detección visual de contaminantes mediante IA/Visión por Computadora.
 model WasteDetection {
-  detection_id     Int      @id @default(autoincrement())
-  node_id          String   @db.VarChar(20)
-  timestamp        DateTime @default(now()) @db.Timestamp(6)
-  coverage_percent Decimal? @db.Decimal(5, 2)
-  image_data       Bytes?
-  model_version    String?  @db.VarChar(50)
-  confidence       Decimal? @db.Decimal(3, 2)
+  detection_id     Int      @id @default(autoincrement()) /// Identificador único de la detección
+  node_id          String   @db.VarChar(20) /// ID del nodo donde se detectó
+  timestamp        DateTime @default(now()) @db.Timestamp(6) /// Fecha y hora de la detección
+  coverage_percent Decimal? @db.Decimal(5, 2) /// Porcentaje del área cubierta por residuos
+  image_data       Bytes? /// Imagen de evidencia (blob)
+  model_version    String?  @db.VarChar(50) /// Versión del modelo de IA utilizado
+  confidence       Decimal? @db.Decimal(3, 2) /// Nivel de confianza de la predicción (0-1)
   node             Node     @relation(fields: [node_id], references: [node_id])
 
   @@map("waste_detections")

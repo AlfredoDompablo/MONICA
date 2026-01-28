@@ -5,6 +5,14 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
+/**
+ * Layout del Panel de Control
+ * 
+ * Envoltura para las páginas protegidas del dashboard. 
+ * Maneja la redirección si no hay sesión y muestra la barra de navegación administrativa.
+ * 
+ * @param {React.ReactNode} children - Contenido de la página.
+ */
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const { data: session, status } = useSession();
     const router = useRouter();

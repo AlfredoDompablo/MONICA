@@ -2,6 +2,16 @@
 
 import { usePathname } from 'next/navigation';
 
+/**
+ * Componente MainLayoutWrapper
+ * 
+ * Envoltorio de diseño principal que ajusta dinámicamente el espaciado (padding) del contenido.
+ * Añade un espaciado superior `pt-20` para compensar la altura del Navbar fijo en las páginas públicas,
+ * mientras que lo elimina para el dashboard y la página de login que gestionan su propio diseño.
+ * 
+ * @param {children} children - El contenido de la página a renderizar.
+ * @returns {JSX.Element} Elemento main con las clases de diseño apropiadas.
+ */
 export default function MainLayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   

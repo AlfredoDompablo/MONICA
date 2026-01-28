@@ -21,7 +21,7 @@ const Hero = () => {
     return (
         <section id="inicio" className="relative w-full min-h-screen flex flex-col items-center justify-center overflow-hidden bg-gray-900 text-white py-20 px-4">
             
-            {/* Background Image */}
+            {/* Imagen de Fondo */}
             <div className="absolute inset-0 z-0">
                 <Image
                     src="/rio magdalena.jpeg"
@@ -30,15 +30,15 @@ const Hero = () => {
                     className="object-cover"
                     priority
                 />
-                {/* Overlay Dark */}
+                {/* Capa de Superposición Oscura */}
                 <div className="absolute inset-0 bg-black/50" />
             </div>
 
-            {/* Background Elements - Subtle Gradients (with reduced opacity) */}
+            {/* Elementos de Fondo - Gradientes Sutiles */}
             <div className="absolute top-0 left-0 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 z-0" />
             <div className="absolute bottom-0 right-0 w-96 h-96 bg-indigo-500/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2 z-0" />
 
-            {/* Header Content */}
+            {/* Contenido del Encabezado */}
             <div className="relative z-10 text-center mb-16 max-w-4xl mx-auto">
                 <motion.h1 
                     initial={{ opacity: 0, y: 20 }}
@@ -58,7 +58,7 @@ const Hero = () => {
                 </motion.p>
             </div>
 
-            {/* Cards Container */}
+            {/* Contenedor de Tarjetas Interactivas */}
             <div className="relative z-10 grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl mx-auto items-start">
                 <TiltCard 
                     title="Visión" 

@@ -17,14 +17,24 @@ import HistoricalChart from './HistoricalChart';
 
 type NodeKey = 'general' | string;
 
+/**
+ * Componente StatisticsSection
+ * 
+ * Sección principal de estadísticas que muestra el Índice de Calidad del Agua (ICA) y visualiza
+ * parámetros individuales (Temperatura, pH, etc.) con indicadores de estado tipo semáforo.
+ * Permite filtrar la visualización por nodo específico o ver el promedio general de toda la red.
+ * Integra la gráfica histórica para un análisis temporal detallado.
+ * 
+ * @returns {JSX.Element} Sección de estadísticas.
+ */
 export default function StatisticsSection() {
     const { selectedNodeId, setSelectedNodeId } = useNodeSelection();
-    // Local state for UI selection (defaults to general, syncs with context)
+    // Estado local para selección de UI (por defecto 'general', sincronizado con contexto)
     const [selectedNode, setSelectedNode] = useState<NodeKey>('general');
     const [nodes, setNodes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Fetch real nodes
+    // Obtener nodos reales
     useEffect(() => {
         const fetchNodes = async () => {
             try {
@@ -42,7 +52,7 @@ export default function StatisticsSection() {
         fetchNodes();
     }, []);
 
-    // Sync context change to local state
+    // Sincronizar cambio de contexto al estado local
     useEffect(() => {
         if (selectedNodeId) {
             setSelectedNode(selectedNodeId);
@@ -51,7 +61,7 @@ export default function StatisticsSection() {
         }
     }, [selectedNodeId]);
 
-    // Handle local click -> update context
+    // Manejar click local -> actualizar contexto
     const handleNodeChange = (key: NodeKey) => {
         setSelectedNode(key);
         if (key === 'general') setSelectedNodeId(null);

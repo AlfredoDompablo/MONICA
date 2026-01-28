@@ -3,8 +3,18 @@ import { prisma } from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 
+/**
+ * GET /api/readings
+ * 
+ * Endpoint público para obtener lecturas de sensores.
+ * Utilizado por gráficos y tablas públicas.
+ * Soporta paginación y filtrado.
+ * 
+ * @param {Request} request - Url con query params (node_id, start_date, end_date, page, limit).
+ * @returns {Promise<NextResponse>} Datos paginados de lecturas.
+ */
 export async function GET(request: Request) {
-    // Public endpoint for charts
+    // Endpoint público para gráficos
     // const session = await getServerSession(authOptions);
     // if (!session) { return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); }
 
@@ -16,7 +26,7 @@ export async function GET(request: Request) {
     const limit = parseInt(searchParams.get('limit') || '50');
     const skip = (page - 1) * limit;
 
-    // Build the where clause dynamically
+    // Construir cláusula where dinámicamente
     const where: any = {};
 
     if (nodeId) {
@@ -29,14 +39,9 @@ export async function GET(request: Request) {
             where.timestamp.gte = new Date(startDate);
         }
         if (endDate) {
-            // Set end date to the end of the day if just a date string is provided, 
-            // or use directly if it's a full ISO string. 
-            // Assuming valid ISO strings or date strings YYYY-MM-DD
+            // Establecer fecha final. Se asume formato ISO o fecha simple YYYY-MM-DD
             const end = new Date(endDate);
-            // If the time is 00:00:00, we generally want to include the whole day, so set to 23:59:59
-            // However, usually filters send specific timestamps or we handle it here.
-            // For simplicity, let's assume the frontend sends the correct end timestamp or we just use 'lte'
-            // Use 'lte' (less than or equal)
+            // Usar 'lte' (menor o igual)
             where.timestamp.lte = end;
         }
     }
@@ -51,7 +56,7 @@ export async function GET(request: Request) {
                 take: limit,
                 skip: skip,
                 include: {
-                    node: {    // Include node details just in case, or at least description
+                    node: {    // Incluir detalles básicos del nodo (descripción)
                         select: {
                             description: true
                         }

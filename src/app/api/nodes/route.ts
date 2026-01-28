@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { nodeSchema } from '@/lib/schemas';
 import { z } from 'zod';
+
 /**
  * GET /api/nodes
  * 
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
     try {
         const body = await request.json();
 
-        // Validate with Zod
+        // Validar con Zod
         const { node_id, description, latitude, longitude, user_id } = nodeSchema.parse(body);
 
         const existingNode = await prisma.node.findUnique({
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
 
         if (existingNode) {
             return NextResponse.json(
-                { error: 'Node ID already exists' },
+                { error: 'ID de nodo ya existente' },
                 { status: 400 }
             );
         }
@@ -65,8 +66,8 @@ export async function POST(request: Request) {
                 description,
                 latitude,
                 longitude,
-                user_id: user_id || null, // Keep user_id if provided, otherwise null
-                last_seen: new Date(), // Keep last_seen as it's a useful field
+                user_id: user_id || null, // Mantener user_id si se provee, si no nulo
+                last_seen: new Date(), // Inicializar last_seen
             },
         });
 

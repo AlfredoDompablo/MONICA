@@ -17,6 +17,14 @@ interface Node {
     }[];
 }
 
+/**
+ * Página Principal del Dashboard
+ * 
+ * Muestra una vista general del estado del sistema, incluyendo:
+ * - Tarjetas con estadísticas clave (Nodos totales, activos, alertas de batería).
+ * - Mapa interactivo con la ubicación de los nodos.
+ * - Tabla con el estado en tiempo real de cada nodo.
+ */
 export default function DashboardPage() {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [isLoading, setIsLoading] = useState(true);

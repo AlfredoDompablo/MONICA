@@ -16,7 +16,7 @@ import { useNodeSelection } from '@/contexts/NodeContext';
 import { format, subDays, addHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 
-// Parameter definitions for ranges (synchronized with waterQuality.ts logic)
+// Definición de parámetros para rangos de calidad del agua (Sincronizado con lógica en waterQuality.ts)
 const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, max: number, green: [number, number], yellow: [number, number][] }> = {
     temperature: { 
         label: 'Temperatura', 
@@ -24,7 +24,7 @@ const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, m
         min: 0, 
         max: 50,
         green: [10, 30],
-        yellow: [[30, 35]] // Only upper yellow range visually useful for simpler chart
+        yellow: [[30, 35]] // Rango amarillo superior visible
     },
     ph: { 
         label: 'pH', 
@@ -38,7 +38,7 @@ const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, m
         label: 'Turbidez', 
         unit: 'UNT', 
         min: 0, 
-        max: 100, // Cap visuals
+        max: 100, // Límite visual
         green: [0, 5],
         yellow: [[5, 25]]
     },
@@ -47,7 +47,7 @@ const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, m
         unit: 'mg/L', 
         min: 0, 
         max: 15,
-        green: [5, 15], // > 5
+        green: [5, 15], // > 5 deseable
         yellow: [[3, 5]]
     },
     conductivity: { 
@@ -60,19 +60,27 @@ const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, m
     }
 };
 
-// Mock Generator Removed
-
-
+/**
+ * Componente HistoricalChart
+ * 
+ * Renderiza una gráfica de área interactiva para visualizar el historial de parámetros de calidad del agua.
+ * Permite alternar entre diferentes parámetros (pH, oxígeno, turbidez, etc.) y visualizar
+ * zonas de seguridad (verde) y riesgo (rojo) basadas en los umbrales definidos en `PARAM_CONFIG`.
+ * 
+ * Si no hay un nodo seleccionado, muestra el promedio general de la red.
+ * 
+ * @returns {JSX.Element} Gráfica histórica interactiva.
+ */
 export default function HistoricalChart() {
     const { selectedNodeId } = useNodeSelection();
     const [selectedParam, setSelectedParam] = useState('ph');
 
     const config = PARAM_CONFIG[selectedParam];
 
-    // Check if we are viewing general average or specific node
+    // Verificar si estamos viendo promedio general o nodo específico
     const isGeneral = !selectedNodeId;
     
-    // State for chart data
+    // Estado para datos de la gráfica
     const [chartData, setChartData] = useState<any[]>([]);
 
     useEffect(() => {
@@ -80,12 +88,12 @@ export default function HistoricalChart() {
             try {
                 let url = `/api/readings?limit=50&node_id=${selectedNodeId}`;
                 
-                // If General (no node selected), fetch more data to aggregate
-                // We assume 4 nodes, so 50 timestamps * 4 = 200 items needed approx
+                // Si es General (ningún nodo seleccionado), obtener más datos para agregar
+                // Asumimos 4 nodos, por lo que requerimos aprox 200 items (50 timestamps * 4)
                 if (!selectedNodeId) {
                     url = `/api/readings?limit=200`;
                 } else {
-                    // Specific node validation to avoid null string
+                    // Validación de nodo específico para evitar cadenas nulas
                     url = `/api/readings?limit=50&node_id=${selectedNodeId}`;
                 }
 
@@ -100,8 +108,8 @@ export default function HistoricalChart() {
                     }
 
                     if (!selectedNodeId) {
-                        // AGGREGATION LOGIC FOR GENERAL AVERAGE
-                        // Group by timestamp
+                        // LÓGICA DE AGREGACIÓN PARA PROMEDIO GENERAL
+                        // Agrupar por timestamp
                         const grouped: Record<number, number[]> = {};
                         
                         rawData.forEach((r: any) => {
@@ -111,24 +119,24 @@ export default function HistoricalChart() {
                             grouped[ts].push(val);
                         });
 
-                        // Calculate average per timestamp
+                        // Calcular promedio por timestamp
                         const aggregated = Object.entries(grouped).map(([ts, values]) => {
                             const avg = values.reduce((a, b) => a + b, 0) / values.length;
                             return {
-                                timestamp: Number(ts), // Keep as number
+                                timestamp: Number(ts), // Mantenemos como número
                                 value: Number(avg.toFixed(2))
                             };
                         });
 
-                        // Sort by timestamp asc
+                        // Ordenar por timestamp ascendente
                         aggregated.sort((a, b) => a.timestamp - b.timestamp);
                         
                         setChartData(aggregated);
 
                     } else {
-                        // SINGLE NODE LOGIC
+                        // LÓGICA PARA NODO INDIVIDUAL
                         const formatted = rawData.map((r: any) => ({
-                            timestamp: new Date(r.timestamp).getTime(), // Keep as number
+                            timestamp: new Date(r.timestamp).getTime(), // Mantenemos como número
                             value: Number(r[selectedParam]) || 0
                         })).sort((a: any, b: any) => a.timestamp - b.timestamp);
                         

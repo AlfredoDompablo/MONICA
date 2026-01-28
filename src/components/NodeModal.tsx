@@ -16,6 +16,15 @@ interface NodeModalProps {
     node: Node | null;
 }
 
+/**
+ * Componente NodeModal
+ * 
+ * Ventana modal para crear nuevos nodos o editar los existentes.
+ * Gestiona un formulario con validación de tipos para ID, descripción y coordenadas geográficas (latitud/longitud).
+ * Si se recibe un `node` prop, entra en modo edición (ID bloqueado); de lo contrario, modo creación.
+ * 
+ * @param {NodeModalProps} props - Propiedades del modal.
+ */
 export default function NodeModal({ isOpen, onClose, onSave, node }: NodeModalProps) {
     const [formData, setFormData] = useState<{
         node_id: string;
