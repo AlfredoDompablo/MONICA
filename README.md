@@ -1,36 +1,53 @@
-# WEB_MONICA - Sistema de Monitoreo Ambiental
+# MONICA - Sistema de Monitoreo Ambiental
 
-**WEB_MONICA** es una plataforma web integral diseñada para el monitoreo y gestión de variables ambientales en ríos y cuerpos de agua. El sistema permite la recolección, visualización y análisis de datos provenientes de nodos de sensores distribuidos, así como la detección de residuos mediante análisis de imágenes.
+> **Plataforma de vigilancia inteligente para la gestión de recursos hídricos en tiempo real.**
+
+**MONICA** (Monitoreo e Inteligencia de Cuerpos de Agua) es una solución tecnológica avanzada diseñada para la supervisión continua, análisis y gestión de variables ambientales críticas en ríos y lagos. Integra sensores IoT distribuidos y visión artificial para ofrecer una visión holística del estado de los cuerpos de agua, facilitando la toma de decisiones informadas.
+
+---
 
 ## 🚀 Características Principales
 
-*   **Gestión de Usuarios y Roles**: Control de acceso y administración de usuarios.
-*   **Gestión de Nodos**: Registro y seguimiento de estaciones de monitoreo (nodos).
-*   **Monitoreo de Sensores**: Registro histórico de variables críticas como pH, oxígeno disuelto, turbidez, etc.
-*   **Detección de Residuos**: Registro de eventos de contaminación detectados por modelos de visión artificial.
-*   **API RESTful**: Interfaz completa para la integración con dispositivos IoT y clientes frontend.
+### 📊 Visualización y Análisis
+*   **Dashboard Interactivo**: Panel de control intuitivo con mapas de localización en tiempo real y estadísticas dinámicas.
+*   **Gráficas Históricas Avanzadas**: Análisis temporal detallado de variables como conductividad, pH, oxígeno disuelto y turbidez.
+*   **Detección de Anomalías**: Identificación visual de zonas de riesgo basada en parámetros configurables de calidad del agua.
 
-## 🛠️ Tecnologías Utilizadas
+### 📡 Gestión IoT y Red
+*   **Gestión de Nodos**: Administración centralizada de estaciones de monitoreo distribuidas.
+*   **Sincronización en Tiempo Real**: Ingesta continua de datos provenientes de múltiples sensores en campo.
 
-Este proyecto utiliza un stack moderno y robusto:
+### 🛡️ Seguridad y Administración
+*   **Control de Acceso (RBAC)**: Sistema robusto de roles y permisos (Administrador/Invitado) asegurado con `next-auth`. (Acceso a lecturas públicas, gestión protegida).
+*   **API RESTful Segura**: Endpoints optimizados para la integración segura con dispositivos hardware y aplicaciones de terceros.
 
-*   **[Next.js 15+](https://nextjs.org/)**: Framework de React para producción (App Router).
-*   **[React](https://react.dev/)**: Biblioteca para interfaces de usuario.
-*   **[Prisma ORM](https://www.prisma.io/)**: Acceso a base de datos tipo-seguro.
-*   **[PostgreSQL](https://www.postgresql.org/)**: Base de datos relacional potente y fiable.
-*   **[Docker](https://www.docker.com/)**: Contenedorización para un despliegue consistente.
+---
+
+## 🛠️ Stack Tecnológico
+
+La plataforma está construida sobre una arquitectura moderna, escalable y mantenible:
+
+| Categoría | Tecnología | Descripción |
+| :--- | :--- | :--- |
+| **Frontend** | ![Next.js](https://img.shields.io/badge/Next.js-15+-black?style=flat-square&logo=next.js) ![React](https://img.shields.io/badge/React-19-blue?style=flat-square&logo=react) | Framework de alto rendimiento y servidor de renderizado. |
+| **Backend** | ![Node.js](https://img.shields.io/badge/Node.js-LTS-green?style=flat-square&logo=node.js) | Lógica de servidor y API Routes. |
+| **Base de Datos** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat-square&logo=postgresql) | Motor SQL relacional para integridad de datos. |
+| **ORM** | ![Prisma](https://img.shields.io/badge/Prisma-6-darkblue?style=flat-square&logo=prisma) | Capa de acceso a datos segura y tipada. |
+| **Infraestructura** | ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=flat-square&logo=docker) | Contenedorización completa para despliegue. |
+
+---
 
 ## 📋 Requisitos Previos
 
-Asegúrate de tener instalado lo siguiente:
+Para desplegar el entorno de desarrollo, asegúrate de contar con:
 
 *   **Node.js** (v18 o superior)
-*   **Docker** y **Docker Compose**
+*   **Docker** y **Docker Compose** (opcional, para BD local)
 *   **Git**
 
-## 🔧 Instalación y Configuración
+---
 
-Sigue estos pasos para levantar el entorno de desarrollo:
+## 🔧 Instalación y Configuración
 
 1.  **Clonar el repositorio:**
 
@@ -43,70 +60,70 @@ Sigue estos pasos para levantar el entorno de desarrollo:
 
     ```bash
     npm install
+    # o si usas yarn
+    yarn install
     ```
 
-3.  **Configurar variables de entorno:**
-    Crea un archivo `.env` en la raíz de `app-web` (o usa el existente) y configura la URL de la base de datos:
+3.  **Configurar entorno:**
+    Crea un archivo `.env` en la raíz basándote en el ejemplo. Asegúrate de definir `DATABASE_URL`:
 
     ```env
-    DATABASE_URL="postgresql://admin:password123@localhost:5432/rio_db?schema=public"
+    DATABASE_URL="postgresql://usuario:password@localhost:5432/nombre_db?schema=public"
+    NEXTAUTH_SECRET="tu_secreto_super_seguro"
+    NEXTAUTH_URL="http://localhost:3000"
     ```
 
-4.  **Levantar la base de datos:**
-    Utiliza Docker Compose para iniciar PostgreSQL:
+4.  **Inicializar Base de Datos:**
 
     ```bash
+    # Si usas Docker para la DB
     docker compose up -d
+
+    # Aplicar migraciones y generar cliente
+    npx prisma migrate dev
     ```
 
-5.  **Sincronizar la base de datos:**
-    Ejecuta las migraciones de Prisma para crear las tablas:
-
+5.  **Cargar Datos de Prueba (Opcional):**
+    
     ```bash
-    npx prisma db push
+    # Sembrar usuario administrador y datos de sensores
+    npm run seed
     ```
+
+---
 
 ## ▶️ Ejecución
 
 ### Modo Desarrollo
-Para iniciar el servidor con recarga en caliente (hot-reload):
+Inicia el servidor con recarga automática:
 
 ```bash
 npm run dev
 ```
-La aplicación estará disponible en `http://localhost:3000`.
+Accede a la plataforma en: [http://localhost:3000](http://localhost:3000)
 
 ### Modo Producción
-Para construir y ejecutar la versión optimizada:
+Para construir y desplegar la versión optimizada:
 
 ```bash
 npm run build
 npm start
 ```
 
-## 📡 Documentación de la API
+---
 
-La aplicación expone los siguientes endpoints REST:
+## 📡 Documentación API (Resumen)
 
-### 👤 Usuarios (`/api/users`)
-*   `GET /api/users`: Listar todos los usuarios.
-*   `POST /api/users`: Registrar un nuevo usuario.
-*   `GET /api/users/[id]`: Obtener detalle de un usuario (incluye nodos asignados).
-*   `PUT /api/users/[id]`: Actualizar información de usuario.
-*   `DELETE /api/users/[id]`: Desactivar usuario (eliminación lógica).
+El sistema expone una API REST organizada por recursos:
 
-### 📡 Nodos (`/api/nodes`)
-*   `GET /api/nodes`: Listar todos los nodos de monitoreo.
-*   `POST /api/nodes`: Registrar un nuevo nodo.
-*   `GET /api/nodes/[id]`: Obtener detalle de un nodo.
+*   **`/api/nodes`**: Gestión de metadatos de las estaciones.
+*   **`/api/sensor-readings`**: Ingesta de datos crudos (POST) y consultas (GET).
+*   **`/api/readings`**: Endpoint optimizado para gráficas históricas (Público).
+*   **`/api/waste-detections`**: Registro de incidentes de contaminación.
+*   **`/api/users`**: Administración de usuarios (Solo Admin).
 
-### 🧪 Lecturas de Sensores (`/api/sensor-readings`)
-*   `GET /api/sensor-readings`: Consultar historial de lecturas.
-    *   *Parámetros opcionales:* `node_id`, `startDate`, `endDate`, `limit`.
-*   **POST** `/api/sensor-readings`: Registrar nueva lectura (usado por nodos IoT).
-
-### ♻️ Detección de Residuos (`/api/waste-detections`)
-*   `GET /api/waste-detections`: Consultar detecciones de residuos.
-*   **POST** `/api/waste-detections`: Registrar evento de detección (soporta imágenes en Base64).
+> **Nota de Seguridad**: Las operaciones de escritura (`POST`, `PUT`, `DELETE`) están estrictamente protegidas y requieren autenticación con rol de Administrador.
 
 ---
+
+© 2026 Proyecto MONICA. Todos los derechos reservados.
