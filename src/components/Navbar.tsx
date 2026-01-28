@@ -23,7 +23,7 @@ export default function Navbar() {
 
   useEffect(() => {
     const handleScroll = () => {
-      const sections = ['inicio', 'mapa'];
+      const sections = ['inicio', 'mapa', 'estadisticas', 'galeria', 'nosotros'];
       const scrollPosition = window.scrollY + 100; // Offset for navbar
 
       for (const section of sections) {
@@ -54,7 +54,7 @@ export default function Navbar() {
   const links = [
     { name: 'Inicio', href: '/', sectionId: 'inicio' },
     { name: 'Mapa', href: '/#mapa', sectionId: 'mapa' },
-    { name: 'Estadísticas', href: '/estadisticas', sectionId: 'estadisticas' },
+    { name: 'Estadísticas', href: '/#estadisticas', sectionId: 'estadisticas' },
     { name: 'Galería', href: '/galeria', sectionId: 'galeria' },
     { name: 'Nosotros', href: '/nosotros', sectionId: 'nosotros' },
   ];

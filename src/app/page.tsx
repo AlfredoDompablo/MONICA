@@ -1,5 +1,7 @@
 import Hero from "@/components/Hero";
 import MapSection from "@/components/MapSection";
+import StatisticsSection from "@/components/StatisticsSection";
+import { NodeProvider } from "@/contexts/NodeContext";
 
 /**
  * Página Principal (Home)
@@ -8,9 +10,12 @@ import MapSection from "@/components/MapSection";
  */
 export default function Home() {
   return (
-    <main>
+    <main className="min-h-screen bg-white">
       <Hero />
-      <MapSection />
+      <NodeProvider>
+        <MapSection />
+        <StatisticsSection />
+      </NodeProvider>
     </main>
   );
 }

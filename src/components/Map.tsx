@@ -47,6 +47,25 @@ interface MapProps {
 const MapComponent = ({ showDetails = false }: MapProps) => {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [loading, setLoading] = useState(true);
+    // Importación segura del contexto (podría no estar disponible si el mapa se usa fuera del Provider)
+    let setSelectedNodeId: ((id: string) => void) | undefined;
+    try {
+        // eslint-disable-next-line react-hooks/rules-of-hooks
+        const ctx = require('@/contexts/NodeContext').useNodeSelection();
+        setSelectedNodeId = ctx.setSelectedNodeId;
+    } catch (e) {
+        // Ignorar si no está dentro del provider
+    }
+
+    const handleNodeSelect = (nodeId: string) => {
+        if (setSelectedNodeId) {
+            setSelectedNodeId(nodeId);
+            const statsSection = document.getElementById('statistics-section');
+            if (statsSection) {
+                statsSection.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+    };
 
     useEffect(() => {
         const fetchNodes = async () => {
@@ -54,7 +73,6 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
                 const response = await fetch('/api/nodes');
                 if (response.ok) {
                     const data = await response.json();
-                    console.log("Map nodes data:", data); // Debugging
                     setNodes(data);
                 }
             } catch (error) {
@@ -68,7 +86,7 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
     }, []);
 
     // Center on Rio Magdalena (approximate central point or first node)
-    const centerPosition: [number, number] = [19.3508, -99.1783]; // General Magdalena coordinates
+    const centerPosition: [number, number] = [19.3508, -99.1783]; 
 
     if (loading) {
         return <div className="h-full w-full flex items-center justify-center bg-gray-100 rounded-xl">Cargando mapa...</div>;
@@ -95,13 +113,19 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
                     <Popup>
                         <div className="p-2 min-w-[200px]">
                             <h3 className="font-bold text-[#1e3570] text-lg mb-1">{node.description}</h3>
-                            <div className="text-sm text-gray-600 space-y-1">
+                            <div className="text-sm text-gray-600 space-y-1 mb-3">
                                 <p><span className="font-semibold">ID:</span> {node.node_id}</p>
                                 {showDetails && node.sensor_readings?.[0]?.battery_level !== undefined && (
                                     <p><span className="font-semibold">Batería:</span> {node.sensor_readings[0].battery_level}%</p>
                                 )}
                                 <p><span className="font-semibold">Última conexión:</span><br/> {node.last_seen ? new Date(node.last_seen).toLocaleString() : 'N/A'}</p>
                             </div>
+                            <button 
+                                onClick={() => handleNodeSelect(node.node_id)}
+                                className="w-full bg-[#1e3570] text-white text-xs font-bold py-2 px-3 rounded hover:bg-blue-800 transition-colors flex items-center justify-center gap-1"
+                            >
+                                Ver Estadísticas Detalladas 📊
+                            </button>
                         </div>
                     </Popup>
                 </Marker>
