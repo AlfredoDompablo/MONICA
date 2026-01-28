@@ -48,7 +48,7 @@ model SensorReading {
   ph               Decimal? @db.Decimal(4, 2)
   dissolved_oxygen Decimal? @db.Decimal(5, 2)
   turbidity        Decimal? @db.Decimal(6, 2)
-  connectivity     Decimal? @db.Decimal(8, 2)
+  conductivity     Decimal? @db.Decimal(8, 2)
   temperature      Decimal? @db.Decimal(5, 2)
   battery_level    Decimal? @db.Decimal(4, 2)
   node             Node     @relation(fields: [node_id], references: [node_id])

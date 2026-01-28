@@ -67,7 +67,7 @@ export async function POST(request: Request) {
             ph,
             dissolved_oxygen,
             turbidity,
-            connectivity,
+            conductivity,
             temperature,
             battery_level
         } = sensorReadingSchema.parse(body);
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
                 ph,
                 dissolved_oxygen,
                 turbidity,
-                connectivity,
+                conductivity,
                 temperature,
                 battery_level,
                 timestamp: new Date(), // Usar hora del servidor

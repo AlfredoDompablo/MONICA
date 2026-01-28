@@ -25,7 +25,7 @@ export const sensorReadingSchema = z.object({
     ph: z.number().min(0, "pH must be >= 0").max(14, "pH must be <= 14").optional().nullable(),
     dissolved_oxygen: z.number().min(0).optional().nullable(),
     turbidity: z.number().min(0).optional().nullable(),
-    connectivity: z.number().min(0).optional().nullable(),
+    conductivity: z.number().min(0).optional().nullable(),
     temperature: z.number().min(-50).max(100).optional().nullable(),
     battery_level: z.number().min(0).max(100).optional().nullable(),
 });
@@ -39,7 +39,7 @@ export const readingUpdateSchema = z.object({
     ph: z.number().min(0).max(14).optional().nullable(),
     dissolved_oxygen: z.number().min(0).optional().nullable(),
     turbidity: z.number().min(0).optional().nullable(),
-    connectivity: z.number().min(0).optional().nullable(),
+    conductivity: z.number().min(0).optional().nullable(),
     temperature: z.number().min(-50).max(100).optional().nullable(),
     battery_level: z.number().min(0).max(100).optional().nullable(),
 });

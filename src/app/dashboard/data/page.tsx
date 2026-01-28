@@ -13,7 +13,7 @@ interface SensorReading {
   ph: number | null;
   dissolved_oxygen: number | null;
   turbidity: number | null;
-  connectivity: number | null;
+  conductivity: number | null;
   temperature: number | null;
   battery_level: number | null;
   node: {
@@ -247,6 +247,7 @@ export default function ReadingsPage() {
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">pH</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Batería</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Temp (°C)</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Conductividad</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Turbidez</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">O.D.</th>
                 <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
@@ -255,11 +256,11 @@ export default function ReadingsPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">Cargando datos...</td>
+                  <td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Cargando datos...</td>
                 </tr>
               ) : readings.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">No se encontraron registros.</td>
+                  <td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">No se encontraron registros.</td>
                 </tr>
               ) : (
                 readings.map((reading) => (
@@ -282,6 +283,7 @@ export default function ReadingsPage() {
                       ) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reading.temperature ?? '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reading.conductivity ?? '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reading.turbidity ?? '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reading.dissolved_oxygen ?? '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">

@@ -13,7 +13,7 @@ export default function ReadingModal({ isOpen, onClose, onSave, reading }: Readi
     ph: '',
     dissolved_oxygen: '',
     turbidity: '',
-    connectivity: '',
+    conductivity: '', // Internal state uses correct term
     temperature: '',
     battery_level: ''
   });
@@ -25,7 +25,7 @@ export default function ReadingModal({ isOpen, onClose, onSave, reading }: Readi
         ph: reading.ph ?? '',
         dissolved_oxygen: reading.dissolved_oxygen ?? '',
         turbidity: reading.turbidity ?? '',
-        connectivity: reading.connectivity ?? '',
+        conductivity: reading.conductivity ?? '', // Direct map now
         temperature: reading.temperature ?? '',
         battery_level: reading.battery_level ?? ''
       });
@@ -79,7 +79,7 @@ export default function ReadingModal({ isOpen, onClose, onSave, reading }: Readi
         ph: formData.ph !== '' ? parseFloat(formData.ph) : null,
         dissolved_oxygen: formData.dissolved_oxygen !== '' ? parseFloat(formData.dissolved_oxygen) : null,
         turbidity: formData.turbidity !== '' ? parseFloat(formData.turbidity) : null,
-        connectivity: formData.connectivity !== '' ? parseFloat(formData.connectivity) : null,
+        conductivity: formData.conductivity !== '' ? parseFloat(formData.conductivity) : null, // Direct map
         temperature: formData.temperature !== '' ? parseFloat(formData.temperature) : null,
         battery_level: formData.battery_level !== '' ? parseFloat(formData.battery_level) : null,
       };
@@ -184,13 +184,13 @@ export default function ReadingModal({ isOpen, onClose, onSave, reading }: Readi
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Conectividad</label>
+                  <label className="block text-sm font-medium text-gray-700">Conductividad</label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
-                    name="connectivity"
-                    value={formData.connectivity}
+                    name="conductivity" // Fixed input name
+                    value={formData.conductivity} // Fixed value binding
                     onChange={handleChange}
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                   />

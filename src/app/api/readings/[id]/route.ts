@@ -29,7 +29,7 @@ export async function PUT(
             ph,
             dissolved_oxygen,
             turbidity,
-            connectivity,
+            conductivity,
             temperature,
             battery_level
         } = readingUpdateSchema.parse(body);
@@ -40,7 +40,7 @@ export async function PUT(
                 ph,
                 dissolved_oxygen,
                 turbidity,
-                connectivity,
+                conductivity,
                 temperature,
                 battery_level,
             },
