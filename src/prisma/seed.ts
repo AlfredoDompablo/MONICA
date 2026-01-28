@@ -4,7 +4,11 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import dotenv from 'dotenv';
 
-dotenv.config();
+import path from 'path';
+
+// Load environment variables from .env file at the root of app-web
+const envPath = path.resolve(__dirname, '../../.env');
+dotenv.config({ path: envPath });
 
 const connectionString = `${process.env.DATABASE_URL}`;
 
