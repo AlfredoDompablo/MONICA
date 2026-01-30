@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useContext } from 'react';
+import { NodeContext } from '@/contexts/NodeContext';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -53,22 +54,17 @@ interface MapProps {
  * @param {boolean} showDetails - Si es true, muestra detalles adicionales como batería en el popup.
  * @returns {JSX.Element} Mapa renderizado.
  */
+
 const MapComponent = ({ showDetails = false }: MapProps) => {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [loading, setLoading] = useState(true);
-    // Importación segura del contexto (podría no estar disponible si el mapa se usa fuera del Provider)
-    let setSelectedNodeId: ((id: string) => void) | undefined;
-    try {
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        const ctx = require('@/contexts/NodeContext').useNodeSelection();
-        setSelectedNodeId = ctx.setSelectedNodeId;
-    } catch (e) {
-        // Ignorar si no está dentro del provider
-    }
+    
+    // Check if we are inside a provider safely
+    const nodeContext = useContext(NodeContext);
 
     const handleNodeSelect = (nodeId: string) => {
-        if (setSelectedNodeId) {
-            setSelectedNodeId(nodeId);
+        if (nodeContext) {
+            nodeContext.setSelectedNodeId(nodeId);
             const statsSection = document.getElementById('statistics-section');
             if (statsSection) {
                 statsSection.scrollIntoView({ behavior: 'smooth' });

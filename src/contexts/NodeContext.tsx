@@ -7,7 +7,7 @@ interface NodeContextType {
     setSelectedNodeId: (id: string | null) => void;
 }
 
-const NodeContext = createContext<NodeContextType | undefined>(undefined);
+export const NodeContext = createContext<NodeContextType | undefined>(undefined);
 
 export function NodeProvider({ children }: { children: ReactNode }) {
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
