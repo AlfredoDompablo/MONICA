@@ -39,6 +39,8 @@ model Node {
   latitude         Decimal          @db.Decimal(10, 8) /// Latitud geográfica
   longitude        Decimal          @db.Decimal(11, 8) /// Longitud geográfica
   last_seen        DateTime?        @db.Timestamp(6) /// Última vez que el nodo reportó actividad
+  key_hash         String?          @unique @db.VarChar(64) /// Hash SHA-256 de la API Key
+  is_active        Boolean          @default(true) /// Permite desactivar el acceso del nodo
   user_id          Int? /// ID del usuario responsable (opcional)
   user             User?            @relation("UserToNodes", fields: [user_id], references: [user_id])
   sensor_readings  SensorReading[] /// Historial de lecturas de sensores

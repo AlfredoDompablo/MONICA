@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
 import { sensorReadingSchema } from '@/lib/schemas';
 import { z } from 'zod';
+import crypto from 'crypto';
 
 /**
  * GET /api/sensor-readings
@@ -61,7 +62,29 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: Request) {
     try {
+        // 1. Validar Hardware Auth (API Key)
+        const apiKey = request.headers.get('x-api-key');
+        if (!apiKey) {
+            return NextResponse.json({ error: 'Missing API Key' }, { status: 401 });
+        }
+
+        // Calcular hash SHA-256
+        const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
+
+        // Buscar nodo activo con ese hash
+        const node = await prisma.node.findUnique({
+            where: { key_hash: hash }
+        });
+
+        if (!node || !node.is_active) {
+            return NextResponse.json({ error: 'Invalid or inactive API Key' }, { status: 401 });
+        }
+
         const body = await request.json();
+
+        // FORZAR el node_id del nodo autenticado (previene spoofing)
+        body.node_id = node.node_id;
+
         const {
             node_id,
             ph,

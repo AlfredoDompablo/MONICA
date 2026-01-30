@@ -45,7 +45,14 @@ export default withAuth(
         ) {
             // Permitir acceso GET para todos (público)
 
-            // Bloquear modificaciones (escritura) si no es administrador
+            // Caso especial: POST /api/sensor-readings (Hardware Auth)
+            // Permitimos que pase el middleware sin verificar token de usuario admin,
+            // ya que la autenticación real se hará con x-api-key en el route handler.
+            if (path.startsWith("/api/sensor-readings") && method === "POST") {
+                return NextResponse.next();
+            }
+
+            // Bloquear modificaciones (escritura) si no es administrador en otras rutas
             if (isModification) {
                 if (token?.role !== "admin") {
                     return new NextResponse(

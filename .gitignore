@@ -42,3 +42,8 @@ next-env.d.ts
 
 # database data
 postgres_data
+
+# Firmware Secrets
+firmware/include/secrets.h
+!firmware/include/secrets.example.h
+.pio
