@@ -111,11 +111,15 @@ export async function POST(request: Request) {
             },
         });
 
-        // Actualizar last_seen del nodo y batería si aplica
+        // Actualizar last_seen del nodo y coordenadas si se proporcionan
+        const updateData: any = { last_seen: new Date() };
+        if (body.latitude !== undefined && body.latitude !== null) updateData.latitude = body.latitude;
+        if (body.longitude !== undefined && body.longitude !== null) updateData.longitude = body.longitude;
+
         await prisma.node.update({
             where: { node_id },
-            data: { last_seen: new Date() }
-        }).catch((err: any) => console.error('Error updating node last_seen:', err));
+            data: updateData
+        }).catch((err: any) => console.error('Error updating node status:', err));
 
         return NextResponse.json(newReading, { status: 201 });
     } catch (error) {
