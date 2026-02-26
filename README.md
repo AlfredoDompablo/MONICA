@@ -65,13 +65,16 @@ Para desplegar el entorno de desarrollo, asegúrate de contar con:
     ```
 
 3.  **Configurar entorno:**
-    Crea un archivo `.env` en la raíz basándote en el ejemplo. Asegúrate de definir `DATABASE_URL`:
+    Crea un archivo `.env` en la raíz basándote en el ejemplo. Asegúrate de definir `DATABASE_URL` y generar un secreto seguro para `NEXTAUTH_SECRET`:
 
     ```env
     DATABASE_URL="postgresql://usuario:password@localhost:5432/nombre_db?schema=public"
     NEXTAUTH_SECRET="tu_secreto_super_seguro"
     NEXTAUTH_URL="http://localhost:3000"
     ```
+    
+    > **Nota:** Puedes generar un valor seguro para `NEXTAUTH_SECRET` ejecutando el siguiente comando en tu terminal:  
+    > `openssl rand -base64 32`
 
 4.  **Inicializar Base de Datos:**
 
