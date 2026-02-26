@@ -53,7 +53,7 @@ Para desplegar el entorno de desarrollo, asegúrate de contar con:
 
     ```bash
     git clone https://github.com/AlfredoDompablo/MONICA.git
-    cd MONICA/app-web
+    cd MONICA
     ```
 
 2.  **Instalar dependencias:**
