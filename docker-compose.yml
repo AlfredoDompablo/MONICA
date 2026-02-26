@@ -4,6 +4,7 @@ services:
     container_name: monica_db
     ports:
       - "5432:5432"
+    restart: always
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: password123
