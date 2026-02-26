@@ -18,7 +18,7 @@
 *   **Sincronización en Tiempo Real**: Ingesta continua de datos provenientes de múltiples sensores en campo.
 
 ### 🛡️ Seguridad y Administración
-*   **Control de Acceso (RBAC)**: Sistema robusto de roles y permisos (Administrador/Invitado) asegurado con `next-auth`. (Acceso a lecturas públicas, gestión protegida).
+*   **Control de Acceso (RBAC)**: Sistema de roles y permisos (Administrador/Invitado) asegurado con `next-auth`. (Acceso a lecturas públicas, gestión protegida).
 *   **API RESTful Segura**: Endpoints optimizados para la integración segura con dispositivos hardware y aplicaciones de terceros.
 
 ---
@@ -60,8 +60,8 @@ Para desplegar el entorno de desarrollo, asegúrate de contar con:
 
     ```bash
     npm install
-    # o si usas yarn
-    yarn install
+    # Si encuentras errores de dependencias (Ej: conflictos con @scalar/api-reference o Next.js 15), usa:
+    npm install --legacy-peer-deps
     ```
 
 3.  **Configurar entorno:**
@@ -86,8 +86,11 @@ Para desplegar el entorno de desarrollo, asegúrate de contar con:
 5.  **Cargar Datos de Prueba (Opcional):**
     
     ```bash
-    # Sembrar usuario administrador y datos de sensores
+    # Sembrar usuario administrador base
     npm run seed
+
+    # Cargar lecturas históricas adicionales desde archivo CSV (Asegúrate de tener el archivo CSV en la ruta correspondiente)
+    npx tsx src/prisma/seed_csv.ts
     ```
 
 ---
@@ -108,6 +111,12 @@ Para construir y desplegar la versión optimizada:
 ```bash
 npm run build
 npm start
+```
+
+**Recomendación con PM2 (Para mantener el proceso activo):**
+```bash
+npm install -g pm2
+pm2 start npm --name "monica-frontend" -- start
 ```
 
 ---
