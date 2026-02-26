@@ -43,6 +43,9 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
+    const body = await request.json();
+    const { full_name, email, passwordRaw, role, is_active } = body;
+
     if (!full_name || !email || !passwordRaw || !role) {
       return NextResponse.json(
         { error: 'Faltan campos obligatorios' },
