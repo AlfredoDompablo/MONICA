@@ -90,10 +90,10 @@ Para desplegar el entorno de desarrollo, asegúrate de contar con:
     
     ```bash
     # Sembrar usuario administrador base
-    npm run seed
+    npx --yes tsx src/prisma/seed.ts
 
     # Cargar lecturas históricas adicionales desde archivo CSV (Asegúrate de tener el archivo CSV en la ruta correspondiente)
-    npx tsx src/prisma/seed_csv.ts
+    npx --yes tsx src/prisma/seed_csv.ts
     ```
 
 ---

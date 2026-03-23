@@ -65,7 +65,7 @@ async function main() {
         console.log('Se aseguraron 4 nodos existentes.');
 
         // 2. Leer y parsear CSV
-        const csvPath = '/home/oscar/PT2-Web/web/app-web/src/prisma/datos_Cuauhtemoc.csv';
+        const csvPath = path.resolve(__dirname, 'datos_Cuauhtemoc.csv');
 
         if (!fs.existsSync(csvPath)) {
             console.error(`Archivo CSV no encontrado en ${csvPath}`);
