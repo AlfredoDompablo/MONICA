@@ -20,6 +20,17 @@ export default withAuth(
 
         // Protección estricta para el endpoint de usuarios (/api/users)
         if (path.startsWith("/api/users")) {
+            // Permitir que CUALQUIER usuario autenticado modifique su propio perfil
+            if (path === "/api/users/profile" && method === "PUT") {
+                if (!token) {
+                    return new NextResponse(
+                        JSON.stringify({ error: "Unauthorized" }),
+                        { status: 401, headers: { "content-type": "application/json" } }
+                    );
+                }
+                return NextResponse.next(); // Sale del middleware y permite la petición
+            }
+
             // Verificar si el usuario está autenticado
             if (!token) {
                 return new NextResponse(
@@ -27,10 +38,11 @@ export default withAuth(
                     { status: 401, headers: { "content-type": "application/json" } }
                 );
             }
-            // Verificar si el usuario tiene rol de administrador para realizar modificaciones
-            if (isModification && token.role !== "admin") {
+            
+            // Requerir rol 'super' para gestionar usuarios (GET, POST, PUT, DELETE)
+            if (token.role !== "super") {
                 return new NextResponse(
-                    JSON.stringify({ error: "Forbidden: Admin role required" }),
+                    JSON.stringify({ error: "Forbidden: Super role required" }),
                     { status: 403, headers: { "content-type": "application/json" } }
                 );
             }
@@ -52,11 +64,11 @@ export default withAuth(
                 return NextResponse.next();
             }
 
-            // Bloquear modificaciones (escritura) si no es administrador en otras rutas
+            // Bloquear modificaciones (escritura) si no es super o admin
             if (isModification) {
-                if (token?.role !== "admin") {
+                if (token?.role !== "admin" && token?.role !== "super") {
                     return new NextResponse(
-                        JSON.stringify({ error: "Forbidden: Admin role required" }),
+                        JSON.stringify({ error: "Forbidden: Admin or Super role required" }),
                         { status: 403, headers: { "content-type": "application/json" } }
                     );
                 }

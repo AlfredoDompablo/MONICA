@@ -56,7 +56,7 @@ export default function Navbar() {
     { name: 'Mapa', href: '/#mapa', sectionId: 'mapa' },
     { name: 'Estadísticas', href: '/#estadisticas', sectionId: 'estadisticas' },
     { name: 'Galería', href: '/galeria', sectionId: 'galeria' },
-    { name: 'Nosotros', href: '/nosotros', sectionId: 'nosotros' },
+    // { name: 'Nosotros', href: '/nosotros', sectionId: 'nosotros' }, // Desactivado temporalmente
   ];
 
   /* No renderizar Navbar en página de login o dashboard */
