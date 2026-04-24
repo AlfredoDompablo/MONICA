@@ -12,7 +12,6 @@ export const nodeSchema = z.object({
     description: z.string().min(1, "Description is required").max(100, "Description too long"),
     latitude: z.number().min(-90).max(90),
     longitude: z.number().min(-180).max(180),
-    user_id: z.number().optional(), // Opcional: ID del usuario creador (si aplica)
 });
 
 /**

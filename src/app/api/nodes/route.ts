@@ -47,7 +47,7 @@ export async function POST(request: Request) {
         const body = await request.json();
 
         // Validar con Zod
-        const { node_id, description, latitude, longitude, user_id } = nodeSchema.parse(body);
+        const { node_id, description, latitude, longitude } = nodeSchema.parse(body);
 
         const existingNode = await prisma.node.findUnique({
             where: { node_id },
@@ -66,7 +66,6 @@ export async function POST(request: Request) {
                 description,
                 latitude,
                 longitude,
-                user_id: user_id || null, // Mantener user_id si se provee, si no nulo
                 last_seen: new Date(), // Inicializar last_seen
             },
         });
