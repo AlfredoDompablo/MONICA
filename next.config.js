@@ -1,8 +1,14 @@
-const withNextra = require('nextra').default({
-    theme: 'nextra-theme-docs',
-    themeConfig: './theme.config.jsx',
-})
-
-module.exports = withNextra({
+/** @type {import('next').NextConfig} */
+const nextConfig = {
     reactStrictMode: true,
-})
+    images: {
+        remotePatterns: [
+            {
+                protocol: 'https',
+                hostname: 'images.unsplash.com',
+            },
+        ],
+    },
+};
+
+module.exports = nextConfig;
