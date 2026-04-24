@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/users/{id}
  * 
@@ -24,8 +26,7 @@ export async function GET(
         }
 
         const user = await prisma.user.findUnique({
-            where: { user_id: userId },
-            include: { nodes: true }, // Incluir nodos asociados
+            where: { user_id: userId }
         });
 
         if (!user) {
@@ -103,18 +104,17 @@ export async function DELETE(
             return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
         }
 
-        // Eliminación lógica (soft delete) cambiando is_active
-        const deletedUser = await prisma.user.update({
+        // Eliminación física (hard delete)
+        const deletedUser = await prisma.user.delete({
             where: { user_id: userId },
-            data: { is_active: false },
         });
 
-        return NextResponse.json({ message: 'Usuario desactivado', user: deletedUser });
-    } catch (error) {
+        return NextResponse.json({ message: 'Usuario eliminado', user: deletedUser });
+    } catch (error: any) {
         console.error('Error deleting user:', error);
-        if ((error as any).code === 'P2025') {
+        if (error.code === 'P2025') {
             return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
         }
-        return NextResponse.json({ error: 'Error al eliminar usuario' }, { status: 500 });
+        return NextResponse.json({ error: 'Error al eliminar usuario', details: error.message }, { status: 500 });
     }
 }
