@@ -91,7 +91,8 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
     }, []);
 
     // Centrar en Río Magdalena (punto central aproximado o primer nodo)
-    const centerPosition: [number, number] = [19.3508, -99.1783]; 
+    //const centerPosition: [number, number] = [19.3508, -99.1783]; 
+    const centerPosition: [number, number] = [19.434239, -99.136157]; 
 
     if (loading) {
         return <div className="h-full w-full flex items-center justify-center bg-gray-100 rounded-xl">Cargando mapa...</div>;
