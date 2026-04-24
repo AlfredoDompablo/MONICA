@@ -17,7 +17,7 @@ import { z } from 'zod';
  */
 export async function PUT(
     request: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const session = await getServerSession(authOptions);
 
@@ -26,7 +26,8 @@ export async function PUT(
     }
 
     try {
-        const id = parseInt(params.id);
+        const { id: paramId } = await params;
+        const id = parseInt(paramId);
         const body = await request.json();
 
         // Validar que el ID sea numérico
@@ -81,7 +82,7 @@ export async function PUT(
  */
 export async function DELETE(
     request: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const session = await getServerSession(authOptions);
 
@@ -90,7 +91,8 @@ export async function DELETE(
     }
 
     try {
-        const id = parseInt(params.id);
+        const { id: paramId } = await params;
+        const id = parseInt(paramId);
 
         if (isNaN(id)) {
             return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
