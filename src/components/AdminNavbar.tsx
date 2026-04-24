@@ -52,7 +52,10 @@ export default function AdminNavbar() {
                         <div className="flex-shrink-0">
                             <span className="mr-4 text-sm text-gray-600">{session?.user?.name || 'Administrador'}</span>
                             <button
-                                onClick={() => signOut({ callbackUrl: '/' })}
+                                onClick={async () => {
+                                    await signOut({ redirect: false });
+                                    window.location.href = '/admin/login';
+                                }}
                                 className="relative inline-flex items-center gap-x-1.5 rounded-md bg-red-50 py-2 px-3 text-sm font-semibold text-red-600 shadow-sm hover:bg-red-100"
                             >
                                 Cerrar Sesión
