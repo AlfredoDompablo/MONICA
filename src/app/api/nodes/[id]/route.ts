@@ -25,9 +25,6 @@ export async function GET(
 
         const node = await prisma.node.findUnique({
             where: { node_id: nodeId },
-            include: {
-                user: true, // Incluir información del usuario asignado
-            },
         });
 
         if (!node) {

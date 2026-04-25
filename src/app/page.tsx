@@ -1,6 +1,7 @@
 import Hero from "@/components/Hero";
 import MapSection from "@/components/MapSection";
 import StatisticsSection from "@/components/StatisticsSection";
+import GallerySection from "@/components/GallerySection";
 import { NodeProvider } from "@/contexts/NodeContext";
 
 /**
@@ -15,6 +16,7 @@ export default function Home() {
       <NodeProvider>
         <MapSection />
         <StatisticsSection />
+        <GallerySection />
       </NodeProvider>
     </main>
   );

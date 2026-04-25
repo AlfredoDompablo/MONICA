@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+ultralytics
+python-multipart
+opencv-python-headless
+numpy
+boto3
+python-dotenv
+uuid

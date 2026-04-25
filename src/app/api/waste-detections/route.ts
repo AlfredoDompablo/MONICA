@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
+import { uploadFile } from '@/lib/s3';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * GET /api/waste-detections
@@ -20,7 +22,7 @@ export async function GET(request: NextRequest) {
         const where: any = {};
         if (node_id) where.node_id = node_id;
 
-        // No incluimos image_data por defecto para no sobrecargar la respuesta
+        // No incluimos datos binarios por defecto para no sobrecargar la respuesta
         const detections = await prisma.wasteDetection.findMany({
             where,
             orderBy: { timestamp: 'desc' },
@@ -32,7 +34,8 @@ export async function GET(request: NextRequest) {
                 coverage_percent: true,
                 model_version: true,
                 confidence: true,
-                // image_data: false // Excluido explícitamente
+                // image_original: false, 
+                // image_masked: false
             }
         });
 
@@ -50,10 +53,10 @@ export async function GET(request: NextRequest) {
  * POST /api/waste-detections
  * 
  * Registra una nueva detección de residuos.
- * Acepta la imagen en formato Base64 y la almacena como Buffer (bytes).
+ * Sube las imágenes a MinIO y guarda las referencias en la base de datos.
  * 
- * @param {Request} request - Metadatos de la detección y imagen en base64.
- * @returns {Promise<NextResponse>} La detección creada (sin devolver la imagen).
+ * @param {Request} request - Metadatos de la detección e imágenes en base64.
+ * @returns {Promise<NextResponse>} La detección creada.
  */
 export async function POST(request: Request) {
     try {
@@ -61,7 +64,8 @@ export async function POST(request: Request) {
         const {
             node_id,
             coverage_percent,
-            image_data_base64, // Esperamos base64
+            image_original_base64,
+            image_masked_base64,
             model_version,
             confidence
         } = body;
@@ -73,27 +77,36 @@ export async function POST(request: Request) {
             );
         }
 
-        let imageBuffer: Buffer | undefined;
-        if (image_data_base64) {
-            try {
-                // Convertir base64 a Buffer
-                imageBuffer = Buffer.from(image_data_base64, 'base64');
-            } catch (e) {
-                console.error('Error converting base64 image:', e);
-                return NextResponse.json({ error: 'Formato de imagen inválido' }, { status: 400 });
-            }
+        const timestamp = new Date();
+        const dateStr = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        let originalKey = null;
+        let maskedKey = null;
+
+        // Subir imagen original a MinIO
+        if (image_original_base64) {
+            const buffer = Buffer.from(image_original_base64, 'base64');
+            const fileName = `${dateStr}/${node_id}_${uuidv4()}_orig.jpg`;
+            originalKey = await uploadFile(buffer, fileName);
+        }
+        
+        // Subir imagen con máscara a MinIO
+        if (image_masked_base64) {
+            const buffer = Buffer.from(image_masked_base64, 'base64');
+            const fileName = `${dateStr}/${node_id}_${uuidv4()}_mask.jpg`;
+            maskedKey = await uploadFile(buffer, fileName);
         }
 
         const newDetection = await prisma.wasteDetection.create({
             data: {
                 node_id,
                 coverage_percent,
-                image_data: imageBuffer as any,
                 model_version,
                 confidence,
-                timestamp: new Date(),
+                timestamp,
+                image_original: originalKey,
+                image_masked: maskedKey,
             },
-            // Seleccionamos campos de retorno para evitar devolver la imagen binaria en la respuesta
             select: {
                 detection_id: true,
                 node_id: true,

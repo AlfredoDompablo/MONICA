@@ -71,7 +71,8 @@ model WasteDetection {
   node_id          String   @db.VarChar(20) /// ID del nodo donde se detectó
   timestamp        DateTime @default(now()) @db.Timestamp(6) /// Fecha y hora de la detección
   coverage_percent Decimal? @db.Decimal(5, 2) /// Porcentaje del área cubierta por residuos
-  image_data       Bytes? /// Imagen de evidencia (blob)
+  image_original   String?  @db.VarChar(255) /// Key del archivo original en S3/MinIO
+  image_masked     String?  @db.VarChar(255) /// Key del archivo con máscara en S3/MinIO
   model_version    String?  @db.VarChar(50) /// Versión del modelo de IA utilizado
   confidence       Decimal? @db.Decimal(3, 2) /// Nivel de confianza de la predicción (0-1)
   node             Node     @relation(fields: [node_id], references: [node_id])

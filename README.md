@@ -1,141 +1,105 @@
-# MONICA - Sistema de Monitoreo Ambiental
+# MONICA - Sistema de Monitoreo Ambiental e Inteligencia Artificial
 
-> **Plataforma de vigilancia inteligente para la gestión de recursos hídricos en tiempo real.**
+> **Plataforma de vigilancia inteligente y visión artificial para la gestión de recursos hídricos.**
 
-**MONICA** (Monitoreo e Inteligencia de Cuerpos de Agua) es una solución tecnológica avanzada diseñada para la supervisión continua, análisis y gestión de variables ambientales críticas en ríos y lagos. Integra sensores IoT distribuidos y visión artificial para ofrecer una visión holística del estado de los cuerpos de agua, facilitando la toma de decisiones informadas.
-
----
-
-## 🚀 Características Principales
-
-### 📊 Visualización y Análisis
-*   **Dashboard Interactivo**: Panel de control intuitivo con mapas de localización en tiempo real y estadísticas dinámicas.
-*   **Gráficas Históricas Avanzadas**: Análisis temporal detallado de variables como conductividad, pH, oxígeno disuelto y turbidez.
-*   **Detección de Anomalías**: Identificación visual de zonas de riesgo basada en parámetros configurables de calidad del agua.
-
-### 📡 Gestión IoT y Red
-*   **Gestión de Nodos**: Administración centralizada de estaciones de monitoreo distribuidas.
-*   **Sincronización en Tiempo Real**: Ingesta continua de datos provenientes de múltiples sensores en campo.
-
-### 🛡️ Seguridad y Administración
-*   **Control de Acceso (RBAC)**: Sistema de roles y permisos (Administrador/Invitado) asegurado con `next-auth`. (Acceso a lecturas públicas, gestión protegida).
-*   **API RESTful Segura**: Endpoints optimizados para la integración segura con dispositivos hardware y aplicaciones de terceros.
+**MONICA** (Monitoreo e Inteligencia de Cuerpos de Agua) es una solución avanzada que integra sensores IoT y **Visión Artificial (YOLOv11)** para la supervisión continua del Río Magdalena.
 
 ---
 
-## 🛠️ Stack Tecnológico
+## 🚀 Nuevas Características (v2.0)
 
-La plataforma está construida sobre una arquitectura moderna, escalable y mantenible:
+### 🤖 Inteligencia Artificial (YOLOv11)
+*   **Segmentación de Residuos**: Identificación precisa de plásticos y contaminantes flotantes usando YOLOv11-seg.
+*   **Cálculo de Cobertura**: Estimación automática del porcentaje de área afectada en cada toma.
+*   **Microservicio de Inferencia**: Servicio independiente en Python (FastAPI) para procesamiento de imágenes de alta velocidad.
 
-| Categoría | Tecnología | Descripción |
+### 📦 Almacenamiento Profesional (S3/MinIO)
+*   **Gestión de Objetos**: Migración del almacenamiento binario de base de datos a un servidor **MinIO local**.
+*   **Optimización de DB**: Base de datos ligera que solo almacena metadatos y rutas (keys) de S3.
+
+### 🖼️ Galería Premium SPA
+*   **Experiencia Single Page**: Galería integrada dinámicamente en la página principal con desplazamiento suave.
+*   **Slider Comparativo**: Visualización interactiva "Before/After" (Original vs Máscara de IA).
+*   **Gestión Administrativa**: Panel de control privado para depurar y gestionar el historial de vigilancia.
+
+---
+
+## 🛠️ Arquitectura del Sistema
+
+| Componente | Tecnología | Rol |
 | :--- | :--- | :--- |
-| **Frontend** | ![Next.js](https://img.shields.io/badge/Next.js-15+-black?style=flat-square&logo=next.js) ![React](https://img.shields.io/badge/React-19-blue?style=flat-square&logo=react) | Framework de alto rendimiento y servidor de renderizado. |
-| **Backend** | ![Node.js](https://img.shields.io/badge/Node.js-LTS-green?style=flat-square&logo=node.js) | Lógica de servidor y API Routes. |
-| **Base de Datos** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat-square&logo=postgresql) | Motor SQL relacional para integridad de datos. |
-| **ORM** | ![Prisma](https://img.shields.io/badge/Prisma-6-darkblue?style=flat-square&logo=prisma) | Capa de acceso a datos segura y tipada. |
-| **Infraestructura** | ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=flat-square&logo=docker) | Contenedorización completa para despliegue. |
+| **Frontend/API** | Next.js 15+ | Interfaz de usuario y orquestación de datos. |
+| **IA Service** | Python + YOLOv11 | Inferencia de visión artificial y segmentación. |
+| **Storage** | MinIO (S3 Compatible) | Almacenamiento de imágenes originales y procesadas. |
+| **Database** | PostgreSQL + Prisma | Persistencia de lecturas y metadatos de IA. |
 
 ---
 
-## 📋 Requisitos Previos
+## 🔧 Guía de Despliegue Completo
 
-Para desplegar el entorno de desarrollo, asegúrate de contar con:
-
-*   **Node.js** (v18 o superior)
-*   **Docker** y **Docker Compose** (opcional, para BD local)
-*   **Git**
-
----
-
-## 🔧 Instalación y Configuración
-
-1.  **Clonar el repositorio:**
-
-    ```bash
-    git clone https://github.com/AlfredoDompablo/MONICA.git
-    cd MONICA
-    ```
-
-2.  **Instalar dependencias:**
-
-    ```bash
-    npm install
-    # Si encuentras errores de dependencias (Ej: conflictos con @scalar/api-reference o Next.js 15), usa:
-    npm install --legacy-peer-deps
-    ```
-
-3.  **Configurar entorno:**
-    Crea un archivo `.env` en la raíz basándote en el ejemplo. Asegúrate de definir `DATABASE_URL` y generar un secreto seguro para `NEXTAUTH_SECRET`:
-
-    ```env
-    DATABASE_URL="postgresql://usuario:password@localhost:5432/nombre_db?schema=public"
-    NEXTAUTH_SECRET="tu_secreto_super_seguro"
-    NEXTAUTH_URL="http://localhost:3000"
-    ```
-    
-    > **Nota:** Puedes generar un valor seguro para `NEXTAUTH_SECRET` ejecutando el siguiente comando en tu terminal:  
-    > `openssl rand -base64 32`
-
-4.  **Inicializar Base de Datos:**
-
-    ```bash
-    # Si usas Docker para la DB
-    docker compose up -d
-
-    # Aplicar migraciones y generar cliente
-    npx prisma migrate dev
-    ```
-
-5.  **Cargar Datos de Prueba (Opcional):**
-    
-    ```bash
-    # Sembrar usuario administrador base
-    npx --yes tsx src/prisma/seed.ts
-
-    # Cargar lecturas históricas adicionales desde archivo CSV (Asegúrate de tener el archivo CSV en la ruta correspondiente)
-    npx --yes tsx src/prisma/seed_csv.ts
-    ```
-
----
-
-## ▶️ Ejecución
-
-### Modo Desarrollo
-Inicia el servidor con recarga automática:
-
+### 1. Infraestructura Base (MinIO)
+Asegúrate de tener MinIO corriendo en tu servidor Debian:
 ```bash
-npm run dev
+docker run -d \
+  -p 9000:9000 -p 9001:9001 \
+  --name minio \
+  -v ~/minio_data:/data \
+  -e "MINIO_ROOT_USER=admin" \
+  -e "MINIO_ROOT_PASSWORD=monica_secret_123" \
+  minio/minio server /data --console-address ":9001"
 ```
-Accede a la plataforma en: [http://localhost:3000](http://localhost:3000)
+*Crea un bucket llamado `detecciones` en la consola de MinIO (puerto 9001).*
 
-### Modo Producción
-Para construir y desplegar la versión optimizada:
-
+### 2. Servicio de Inteligencia Artificial (Python)
+Dentro de la carpeta `ai_service`:
 ```bash
+# Instalación de dependencias de sistema
+sudo apt update && sudo apt install -y python3-venv libgl1-mesa-glx libglib2.0-0
+
+# Configurar entorno
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+# Ejecutar servicio (Puerto 8000)
+./venv/bin/python main.py
+```
+
+### 3. Aplicación Principal (Next.js)
+```bash
+# Instalar dependencias
+npm install --legacy-peer-deps
+
+# Sincronizar Base de Datos
+npx prisma db push
+
+# Ejecutar en modo producción
 npm run build
-npm start
-```
-
-**Recomendación con PM2 (Para mantener el proceso activo):**
-```bash
-npm install -g pm2
-pm2 start npm --name "monica-frontend" -- start
+pm2 start npm --name "monica-app" -- start
 ```
 
 ---
 
-## 📡 Documentación API (Resumen)
+## 📋 Variables de Entorno (.env)
+Asegúrate de tener estas claves configuradas:
+```env
+# Database
+DATABASE_URL="postgresql://..."
 
-El sistema expone una API REST organizada por recursos:
+# S3 / MinIO
+S3_ENDPOINT="http://localhost:9000"
+S3_ACCESS_KEY="admin"
+S3_SECRET_KEY="monica_secret_123"
+S3_BUCKET_NAME="detecciones"
+S3_REGION="us-east-1"
 
-*   **`/api/nodes`**: Gestión de metadatos de las estaciones.
-*   **`/api/sensor-readings`**: Ingesta de datos crudos (POST) y consultas (GET).
-*   **`/api/readings`**: Endpoint optimizado para gráficas históricas (Público).
-*   **`/api/waste-detections`**: Registro de incidentes de contaminación.
-*   **`/api/users`**: Administración de usuarios (Solo Admin).
-
-> **Nota de Seguridad**: Las operaciones de escritura (`POST`, `PUT`, `DELETE`) están estrictamente protegidas y requieren autenticación con rol de Administrador.
+# AI Service
+AI_SERVICE_URL="http://localhost:8000"
+```
 
 ---
 
-© 2026 Proyecto MONICA. Todos los derechos reservados.
+## 📡 Endpoints de IA
+*   `POST /process`: Recibe imagen del nodo y devuelve metadatos de segmentación.
+
+---
+© 2026 Proyecto MONICA. Implementación Profesional con Visión Artificial.
