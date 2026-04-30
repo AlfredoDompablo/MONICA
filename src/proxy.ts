@@ -9,12 +9,14 @@ export default withAuth(
 
         console.log(`Middleware: ${method} ${path} - User Role: ${token?.role || 'Guest'}`);
 
-        // Definir rutas que requieren privilegios de administrador para modificaciones (POST, PUT, DELETE).
-        // Las peticiones GET a estas rutas (excepto usuarios) deben ser públicas.
-
-        // Lógica de Autorización:
-        // 1. Si el método es POST/PUT/DELETE -> Requiere rol de Administrador.
-        // 2. Si el método es GET -> Acceso Público (implícito), EXCEPTO rutas sensibles.
+        // 0. BYPASS TOTAL para peticiones de Hardware/Script (POST a endpoints de datos)
+        if (
+            (path.startsWith("/api/sensor-readings") || path.startsWith("/api/waste-detections")) && 
+            method === "POST"
+        ) {
+            console.log("Middleware: Bypass detectado para Hardware POST");
+            return NextResponse.next();
+        }
 
         const isModification = method === "POST" || method === "PUT" || method === "DELETE";
 
@@ -57,12 +59,7 @@ export default withAuth(
         ) {
             // Permitir acceso GET para todos (público)
 
-            // Caso especial: POST /api/sensor-readings (Hardware Auth)
-            // Permitimos que pase el middleware sin verificar token de usuario admin,
-            // ya que la autenticación real se hará con x-api-key en el route handler.
-            if (path.startsWith("/api/sensor-readings") && method === "POST") {
-                return NextResponse.next();
-            }
+
 
             // Bloquear modificaciones (escritura) si no es super o admin
             if (isModification) {

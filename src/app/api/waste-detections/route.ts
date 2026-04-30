@@ -52,80 +52,74 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/waste-detections
  * 
- * Registra una nueva detección de residuos.
- * Sube las imágenes a MinIO y guarda las referencias en la base de datos.
+ * Registra una nueva detección enviando la imagen al microservicio de IA.
  * 
- * @param {Request} request - Metadatos de la detección e imágenes en base64.
- * @returns {Promise<NextResponse>} La detección creada.
+ * @param {Request} request - Imagen en base64 y metadatos del nodo.
  */
 export async function POST(request: Request) {
     try {
         const body = await request.json();
         const {
             node_id,
-            coverage_percent,
             image_original_base64,
-            image_masked_base64,
-            model_version,
-            confidence
+            model_version // Opcional, el AI Service devolverá el real
         } = body;
 
-        if (!node_id) {
+        if (!node_id || !image_original_base64) {
             return NextResponse.json(
-                { error: 'El ID del nodo es obligatorio' },
+                { error: 'El ID del nodo y la imagen base64 son obligatorios' },
                 { status: 400 }
             );
         }
 
-        const timestamp = new Date();
-        const dateStr = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
+        // 1. Enviar imagen al Microservicio de IA (Python/FastAPI)
+        const aiServiceUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
         
-        let originalKey = null;
-        let maskedKey = null;
+        // Convertir base64 a Blob para el FormData
+        const buffer = Buffer.from(image_original_base64, 'base64');
+        const formData = new FormData();
+        formData.append('file', new Blob([buffer]), 'image.jpg');
+        formData.append('node_id', node_id);
 
-        // Subir imagen original a MinIO
-        if (image_original_base64) {
-            const buffer = Buffer.from(image_original_base64, 'base64');
-            const fileName = `${dateStr}/${node_id}_${uuidv4()}_orig.jpg`;
-            originalKey = await uploadFile(buffer, fileName);
-        }
-        
-        // Subir imagen con máscara a MinIO
-        if (image_masked_base64) {
-            const buffer = Buffer.from(image_masked_base64, 'base64');
-            const fileName = `${dateStr}/${node_id}_${uuidv4()}_mask.jpg`;
-            maskedKey = await uploadFile(buffer, fileName);
+        const aiResponse = await fetch(`${aiServiceUrl}/process`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!aiResponse.ok) {
+            const errorText = await aiResponse.text();
+            throw new Error(`AI Service Error: ${errorText}`);
         }
 
+        const aiResult = await aiResponse.json();
+
+        // 2. Guardar el resultado en la base de datos PostgreSQL
         const newDetection = await prisma.wasteDetection.create({
             data: {
-                node_id,
-                coverage_percent,
-                model_version,
-                confidence,
-                timestamp,
-                image_original: originalKey,
-                image_masked: maskedKey,
+                node_id: aiResult.node_id,
+                coverage_percent: aiResult.coverage_percent,
+                model_version: aiResult.model_version,
+                confidence: aiResult.confidence,
+                timestamp: new Date(),
+                image_original: aiResult.image_original,
+                image_masked: aiResult.image_masked,
             },
             select: {
                 detection_id: true,
                 node_id: true,
                 timestamp: true,
                 coverage_percent: true,
-                model_version: true,
                 confidence: true,
             }
         });
 
         return NextResponse.json(newDetection, { status: 201 });
     } catch (error) {
-        console.error('Error creating waste detection:', error);
-        if ((error as any).code === 'P2003') {
-            return NextResponse.json({ error: 'El nodo especificado no existe' }, { status: 400 });
-        }
+        console.error('Error in detection flow:', error);
         return NextResponse.json(
-            { error: 'Error al registrar detección' },
+            { error: 'Error al procesar la detección con IA' },
             { status: 500 }
         );
     }
 }
+
