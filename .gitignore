@@ -42,6 +42,11 @@ next-env.d.ts
 
 # database data
 postgres_data
+minio_data
+**/venv
+.env
+.env.local
+.env.*.local
 
 # Firmware Secrets
 firmware/include/secrets.h
