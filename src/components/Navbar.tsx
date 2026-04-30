@@ -23,25 +23,30 @@ export default function Navbar() {
 
   useEffect(() => {
     const handleScroll = () => {
-      const sections = ['inicio', 'mapa', 'estadisticas', 'galeria', 'nosotros'];
-      const scrollPosition = window.scrollY + 100; // Compensación para la barra de navegación
+      const sections = ['inicio', 'mapa', 'estadisticas', 'galeria'];
+      const scrollPosition = window.scrollY + 120; // Un poco más de margen para el header
+
+      // Caso especial: Si llegamos al final del scroll, marcar la última sección
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 50) {
+        setActiveSection('galeria');
+        return;
+      }
 
       for (const section of sections) {
         const element = document.getElementById(section);
         if (element) {
           const offsetTop = element.offsetTop;
-          const offsetBottom = offsetTop + element.offsetHeight;
+          const offsetHeight = element.offsetHeight;
 
-          if (scrollPosition >= offsetTop && scrollPosition < offsetBottom) {
+          if (scrollPosition >= offsetTop && scrollPosition < offsetTop + offsetHeight) {
             setActiveSection(section);
+            break; // Detener una vez encontrada la sección
           }
         }
       }
     };
 
     window.addEventListener('scroll', handleScroll);
-    
-    // Verificar posición inicial
     handleScroll();
     
     return () => window.removeEventListener('scroll', handleScroll);

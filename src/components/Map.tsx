@@ -65,7 +65,7 @@ const MapComponent = ({ showDetails = false }: MapProps) => {
     const handleNodeSelect = (nodeId: string) => {
         if (nodeContext) {
             nodeContext.setSelectedNodeId(nodeId);
-            const statsSection = document.getElementById('statistics-section');
+            const statsSection = document.getElementById('estadisticas');
             if (statsSection) {
                 statsSection.scrollIntoView({ behavior: 'smooth' });
             }

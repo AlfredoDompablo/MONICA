@@ -202,14 +202,23 @@ export default function StatisticsSection() {
             <div className="absolute left-0 bottom-0 w-64 h-64 bg-emerald-200/20 rounded-full blur-3xl -z-10" />
 
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div className="text-center mb-12">
-                    <h2 className="text-3xl md:text-5xl font-black text-[#1e3570] mb-6 tracking-tight">
-                        Análisis de Calidad del Agua
-                    </h2>
-                    <p className="text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
-                        Evaluación en tiempo real mediante nuestra red de sensores distribuidos.
-                        Selecciona un nodo para ver detalles específicos o visualiza el promedio general.
-                    </p>
+                {/* Header de Sección Estilo Premium */}
+                <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-6">
+                    <motion.div 
+                        initial={{ opacity: 0, x: -20 }}
+                        whileInView={{ opacity: 1, x: 0 }}
+                        viewport={{ once: true }}
+                        className="max-w-2xl"
+                    >
+                        <h2 className="text-sm font-bold text-[#1e3570] uppercase tracking-[0.3em] mb-3">Métricas Vitales</h2>
+                        <h3 className="text-4xl md:text-5xl font-black text-gray-900 tracking-tight">
+                            Análisis de <span className="text-blue-600">Calidad del Agua</span>
+                        </h3>
+                        <p className="mt-4 text-gray-600 text-lg">
+                            Evaluación en tiempo real mediante nuestra red de sensores distribuidos.
+                            Selecciona un nodo para ver detalles específicos o visualiza el promedio general.
+                        </p>
+                    </motion.div>
                 </div>
 
                 {/* Node Selector Pills */}
@@ -242,7 +251,6 @@ export default function StatisticsSection() {
                 {/* ICA Score Main Card */}
                 <div className="mb-12">
                      <motion.div 
-                        key={selectedNode} // Animate on change
                         initial={{ opacity: 0, scale: 0.98 }}
                         animate={{ opacity: 1, scale: 1 }}
                         transition={{ duration: 0.4 }}

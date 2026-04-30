@@ -5,7 +5,7 @@ import { Camera, Filter, RefreshCcw, Trash2 } from 'lucide-react';
 import DetectionModal from '@/components/admin/gallery/DetectionModal';
 
 export default function AdminGalleryPage() {
-    const [detections, setDetections] = useState([]);
+    const [detections, setDetections] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedDetection, setSelectedDetection] = useState(null);
     const [filterNode, setFilterNode] = useState('');
@@ -16,7 +16,7 @@ export default function AdminGalleryPage() {
             const url = filterNode ? `/api/waste-detections?node_id=${filterNode}` : '/api/waste-detections';
             const res = await fetch(url);
             const data = await res.json();
-            setDetections(data);
+            setDetections(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error loading detections:', error);
         } finally {

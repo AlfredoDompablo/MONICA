@@ -11,7 +11,7 @@ import { motion } from 'framer-motion';
  * Sección integrada en la página principal para mostrar las detecciones de residuos.
  */
 export default function GallerySection() {
-    const [detections, setDetections] = useState([]);
+    const [detections, setDetections] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedDetection, setSelectedDetection] = useState(null);
     const [filterNode, setFilterNode] = useState('');
@@ -22,7 +22,7 @@ export default function GallerySection() {
             const url = filterNode ? `/api/waste-detections?node_id=${filterNode}` : '/api/waste-detections';
             const res = await fetch(url);
             const data = await res.json();
-            setDetections(data);
+            setDetections(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error loading detections:', error);
         } finally {
