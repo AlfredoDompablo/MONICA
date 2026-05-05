@@ -51,4 +51,6 @@ minio_data
 # Firmware Secrets
 firmware/include/secrets.h
 !firmware/include/secrets.example.h
+firmware_concentrator/include/secrets.h
+!firmware_concentrator/include/secrets.example.h
 .pio
