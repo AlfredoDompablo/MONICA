@@ -78,8 +78,8 @@ export default function ReadingsPage() {
   }, []);
 
   // Fetch Readings
-  const fetchReadings = async () => {
-    setLoading(true);
+  const fetchReadings = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams({
         page: page.toString(),
@@ -99,15 +99,19 @@ export default function ReadingsPage() {
     } catch (error) {
       console.error('Error fetching readings:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (session) {
       fetchReadings();
+      
+      // Polling silencioso en segundo plano cada 10 segundos
+      const interval = setInterval(() => fetchReadings(true), 10000);
+      return () => clearInterval(interval);
     }
-  }, [session, page]); // Re-fetch when session is ready or page changes
+  }, [session, page, selectedNode, startDate, endDate]); // Re-fetch when session, page or active filters change
 
   const handleFilter = (e: React.FormEvent) => {
     e.preventDefault();

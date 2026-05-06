@@ -149,6 +149,9 @@ export default function HistoricalChart() {
         };
 
         fetchHistory();
+        
+        const interval = setInterval(fetchHistory, 10000);
+        return () => clearInterval(interval);
     }, [selectedNodeId, selectedParam]);
 
     const data = chartData;

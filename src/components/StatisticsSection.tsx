@@ -34,7 +34,7 @@ export default function StatisticsSection() {
     const [nodes, setNodes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Obtener nodos reales
+    // Obtener nodos reales con refresco automático cada 10 segundos
     useEffect(() => {
         const fetchNodes = async () => {
             try {
@@ -50,6 +50,9 @@ export default function StatisticsSection() {
             }
         };
         fetchNodes();
+        
+        const interval = setInterval(fetchNodes, 10000);
+        return () => clearInterval(interval);
     }, []);
 
     // Sincronizar cambio de contexto al estado local

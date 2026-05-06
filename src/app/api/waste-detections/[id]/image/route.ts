@@ -39,11 +39,11 @@ export async function GET(
         // Recuperar el buffer desde MinIO
         const imageData = await getFile(s3Key);
 
-        // Devolver la imagen con el Content-Type adecuado
+        // Devolver la imagen sin caché agresiva para evitar colisiones al resetear IDs en desarrollo
         return new NextResponse(imageData as any, {
             headers: {
                 'Content-Type': 'image/jpeg',
-                'Cache-Control': 'public, max-age=31536000, immutable'
+                'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
             }
         });
     } catch (error) {

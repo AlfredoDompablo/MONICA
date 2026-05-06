@@ -56,7 +56,7 @@ export default function DashboardPage() {
         };
 
         fetchNodes();
-        const interval = setInterval(fetchNodes, 30000); // Update every 30s
+        const interval = setInterval(fetchNodes, 10000); // Update every 10s
         return () => clearInterval(interval);
     }, []);
 

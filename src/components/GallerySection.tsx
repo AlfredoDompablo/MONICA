@@ -16,8 +16,8 @@ export default function GallerySection() {
     const [selectedDetection, setSelectedDetection] = useState(null);
     const [filterNode, setFilterNode] = useState('');
     
-    const fetchDetections = async () => {
-        setLoading(true);
+    const fetchDetections = async (silent = false) => {
+        if (!silent) setLoading(true);
         try {
             const url = filterNode ? `/api/waste-detections?node_id=${filterNode}` : '/api/waste-detections';
             const res = await fetch(url);
@@ -26,12 +26,16 @@ export default function GallerySection() {
         } catch (error) {
             console.error('Error loading detections:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     };
 
     useEffect(() => {
         fetchDetections();
+        
+        // Polling silencioso cada 10 segundos
+        const interval = setInterval(() => fetchDetections(true), 10000);
+        return () => clearInterval(interval);
     }, [filterNode]);
 
     return (
@@ -69,7 +73,7 @@ export default function GallerySection() {
                             </select>
                         </div>
                         <button 
-                            onClick={fetchDetections}
+                            onClick={() => fetchDetections()}
                             className="p-2 text-gray-400 hover:text-[#1e3570] transition-colors"
                         >
                             <RefreshCcw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
