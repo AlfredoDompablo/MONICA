@@ -6,7 +6,9 @@
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <SD.h>
+#include <RadioLib.h>
 #include "secrets.h"
+#include "lora_protocol.h"
 
 // --- Hardware Definitions ---
 #define VEXT_PIN 3        
@@ -14,7 +16,16 @@
 #define GNSS_RX_PIN 33    
 #define GNSS_TX_PIN 34    
 
-// --- SD Card SPI Pins (Custom) ---
+// --- LoRa SPI Pins (Heltec Internal) ---
+#define LORA_CS   8
+#define LORA_SCK  9
+#define LORA_MOSI 10
+#define LORA_MISO 11
+#define LORA_RST  12
+#define LORA_BUSY 13
+#define LORA_DIO1 14
+
+// --- SD Card SPI Pins (Custom Secondary SPI) ---
 #define SD_MISO 4
 #define SD_MOSI 5
 #define SD_SCK  6
@@ -23,13 +34,18 @@
 // --- Objects ---
 TinyGPSPlus gps;
 TFT_eSPI tft = TFT_eSPI(); 
-SPIClass spiSD(FSPI); // Use an alternative SPI bus for SD
+SPIClass spiSD(HSPI); // Secondary SPI bus for SD
+
+SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 // --- Variables ---
 unsigned long lastSensorTime = 0;
 unsigned long lastImageTime = 0;
 const unsigned long sensorInterval = 10000; // 10 seconds
 const unsigned long imageInterval = 30000;  // 60 seconds
+bool sdMounted = false;
+File currentImgFile;
+bool isImgFileOpen = false;
 
 // --- Custom Stream Class for Base64 Encoding on the fly ---
 class ImagePayloadStream : public Stream {
@@ -162,6 +178,19 @@ void setup() {
   // GPS
   Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
 
+  // LoRa SPI & Init
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+  tft.println("Iniciando LoRa...");
+  int state = radio.begin(915.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false); // 915MHz, SF9
+  if (state == RADIOLIB_ERR_NONE) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.println("LoRa OK!");
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("Error LoRa: "); tft.println(state);
+  }
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
   // SD Card
   tft.setTextSize(1);
   tft.println("Montando SD...");
@@ -171,11 +200,13 @@ void setup() {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.println("Error: SD Card!");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    sdMounted = false;
   } else {
     Serial.println("SD Inicializada.");
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("SD OK!");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    sdMounted = true;
   }
 
   // WiFi
@@ -185,11 +216,45 @@ void setup() {
     delay(500);
     tft.print(".");
   }
+  
+  // Dibujar el Dashboard Permanente (Mitad Superior)
   tft.fillScreen(TFT_BLACK);
+  tft.setTextSize(1);
   tft.setCursor(0, 0);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.println("=== MONICA CONCENTRADOR ===");
+  
+  // Estado de Hardware (Fila 1)
+  tft.setCursor(0, 10);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.print("SD: ");
+  if (sdMounted) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.print("OK");
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("ERR");
+  }
+  
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.print("  |  WiFi: ");
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.println("WiFi OK!");
+  tft.println("OK");
+  
+  // IP (Fila 2)
+  tft.setCursor(0, 20);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.print("IP: ");
   tft.println(WiFi.localIP());
+  
+  // Separador (Fila 3)
+  tft.setCursor(0, 30);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.println("---------------------------");
+
+  // Iniciar la escucha LoRa en segundo plano
+  radio.startReceive();
+  Serial.println("Concentrador listo y escuchando por LoRa...");
 }
 
 void sendSensorData() {
@@ -242,62 +307,193 @@ void sendSensorData() {
   http.end();
 }
 
-void sendImageData() {
+void forwardSensorData(uint8_t nodeId, SensorPayload* sp) {
   if (WiFi.status() != WL_CONNECTED) return;
-  
-  File file = SD.open("/test.jpeg", FILE_READ);
-  if (!file) {
-    Serial.println("No se encontro test.jpg en SD");
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.println("Sin imagen (test.jpeg)");
-    return;
-  }
-
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.println("Enviando Imagen...");
-  Serial.println("Enviando Imagen...");
-
   HTTPClient http;
-  http.setTimeout(30000); // 30 segundos de timeout para imágenes
-  http.begin(AI_API_URL);
+  
+  StaticJsonDocument<400> doc;
+  char nodeFormatted[20];
+  sprintf(nodeFormatted, "NODE_%03d", nodeId);
+  doc["node_id"] = String(nodeFormatted);
+  doc["latitude"] = sp->latitude;
+  doc["longitude"] = sp->longitude;
+  doc["ph"] = sp->ph;
+  doc["dissolved_oxygen"] = sp->dissolved_oxygen;
+  doc["turbidity"] = sp->turbidity;
+  doc["conductivity"] = sp->conductivity;
+  doc["temperature"] = sp->temperature;
+  doc["battery_level"] = sp->battery_level;
+
+  String jsonOutput;
+  serializeJson(doc, jsonOutput);
+
+  http.begin(API_URL);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-api-key", API_KEY);
-
-  // Instanciar Stream con la imagen
-  ImagePayloadStream payloadStream(file, NODE_ID);
-
-  Serial.print("Enviando Payload de: ");
-  Serial.print(payloadStream.getTotalSize());
-  Serial.println(" bytes");
-  tft.println(String(payloadStream.getTotalSize() / 1024) + " KB");
-
-  // Enviar el Stream (Chunked Encoding transparente)
-  int httpResponseCode = http.sendRequest("POST", &payloadStream, payloadStream.getTotalSize());
-
-  if (httpResponseCode > 0) {
+  
+  tft.fillRect(0, 60, 160, 20, TFT_BLACK); // Zona de acción (Fila inferior)
+  tft.setCursor(0, 60);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.println("Subiendo HTTP...");
+  
+  int httpResponseCode = http.POST(jsonOutput);
+  if (httpResponseCode == 200 || httpResponseCode == 201) {
+    Serial.println(String("Sensor Reenviado OK: ") + httpResponseCode);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.println(String("Imagen OK: ") + httpResponseCode);
-    Serial.println(String("Imagen enviada con exito. Codigo: ") + httpResponseCode);
+    tft.println("POST OK!");
   } else {
+    Serial.println(String("Error reenviando sensor: ") + httpResponseCode);
     tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.println(String("Error Imagen: ") + httpResponseCode);
-    Serial.println(String("Fallo envio imagen. Codigo: ") + httpResponseCode);
+    tft.println("POST ERR!");
   }
-
-  file.close();
   http.end();
 }
 
-void loop() {
-  smartDelay(100); 
-  
-  if (millis() - lastSensorTime > sensorInterval) {
-    sendSensorData();
-    lastSensorTime = millis();
-  }
+void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
+    String filename = String("/img_node_") + packet->header.nodeId + ".jpg";
+    
+    tft.fillRect(0, 60, 160, 20, TFT_BLACK); // Zona de acción
+    tft.setCursor(0, 60);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    
+    if (packet->header.dataType == LORA_TYPE_IMG_START) {
+        if (isImgFileOpen) {
+            currentImgFile.close();
+            isImgFileOpen = false;
+        }
+        if (SD.exists(filename)) SD.remove(filename);
+        currentImgFile = SD.open(filename, FILE_WRITE);
+        if (currentImgFile) {
+            isImgFileOpen = true;
+            if (payloadLen > 0) {
+                currentImgFile.write(packet->payload, payloadLen);
+            }
+        }
+        Serial.printf("IMG_START de Nodo %d (Archivo SD Abierto)\n", packet->header.nodeId);
+        tft.println("Recibiendo Foto...");
+    } 
+    else if (packet->header.dataType == LORA_TYPE_IMG_CHUNK) {
+        // Recuperación o resincronización limpia en Chunk 1
+        if (packet->header.pktIndex == 1) {
+            if (isImgFileOpen) {
+                currentImgFile.close();
+                isImgFileOpen = false;
+            }
+            if (SD.exists(filename)) SD.remove(filename);
+            currentImgFile = SD.open(filename, FILE_WRITE);
+            if (currentImgFile) {
+                isImgFileOpen = true;
+            }
+            Serial.println("Sincronia: Archivo recreado en Chunk 1.");
+        }
+        
+        if (isImgFileOpen) {
+            currentImgFile.write(packet->payload, payloadLen);
+        } else {
+            currentImgFile = SD.open(filename, FILE_APPEND);
+            if (currentImgFile) {
+                isImgFileOpen = true;
+                currentImgFile.write(packet->payload, payloadLen);
+            }
+        }
+        Serial.printf("IMG_CHUNK seq %d\n", packet->header.pktIndex);
+        tft.print("Chunk: "); tft.println(packet->header.pktIndex);
+    }
+    else if (packet->header.dataType == LORA_TYPE_IMG_END) {
+        if (isImgFileOpen) {
+            if (payloadLen > 0) {
+                currentImgFile.write(packet->payload, payloadLen);
+            }
+            currentImgFile.close();
+            isImgFileOpen = false;
+            Serial.println("Cerrando archivo de imagen en la SD.");
+        } else {
+            File file = SD.open(filename, FILE_APPEND);
+            if (file) {
+                file.write(packet->payload, payloadLen);
+                file.close();
+            }
+        }
+        
+        File imgFile = SD.open(filename, FILE_READ);
+        if (imgFile) {
+            size_t finalSize = imgFile.size();
+            Serial.printf("IMG_END. Reensamblado completo! Tamaño SD: %u bytes. Enviando a API...\n", finalSize);
+            
+            // DEBUG: Imprimir los primeros 32 bytes de la SD en HEX
+            uint8_t temp[32];
+            size_t bytesRead = imgFile.read(temp, 32);
+            Serial.printf("DEBUG HEX SD FILE: ");
+            for (size_t i = 0; i < bytesRead; i++) {
+                Serial.printf("%02X ", temp[i]);
+            }
+            Serial.println();
+            imgFile.seek(0); // CRITICO: Regresar el cursor al inicio para la transmisión
+            
+            tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+            tft.println("Subiendo IA API...");
+            char imgNodeFormatted[20];
+            sprintf(imgNodeFormatted, "NODE_%03d", packet->header.nodeId);
+            ImagePayloadStream payloadStream(imgFile, String(imgNodeFormatted));
+            HTTPClient http;
+            http.setTimeout(30000);
+            http.begin(AI_API_URL);
+            http.addHeader("Content-Type", "application/json");
+            http.addHeader("x-api-key", API_KEY);
+            int httpResponseCode = http.sendRequest("POST", &payloadStream, payloadStream.getTotalSize());
+            Serial.printf("Envio a IA API completado. Codigo: %d\n", httpResponseCode);
+            
+            tft.fillRect(0, 60, 160, 20, TFT_BLACK);
+            tft.setCursor(0, 60);
+            if(httpResponseCode == 200 || httpResponseCode == 201) {
+              tft.setTextColor(TFT_GREEN, TFT_BLACK);
+              tft.println("Foto API OK!");
+            } else {
+              tft.setTextColor(TFT_RED, TFT_BLACK);
+              tft.printf("ERR API: %d\n", httpResponseCode);
+            }
+            imgFile.close();
+        }
+    }
+}
 
-  if (millis() - lastImageTime > imageInterval) {
-    sendImageData();
-    lastImageTime = millis();
-  }
+void handleLoRa() {
+    if (digitalRead(LORA_DIO1)) { 
+        LoRaPacket packet;
+        int state = radio.readData((uint8_t*)&packet, sizeof(packet));
+        
+        if (state == RADIOLIB_ERR_NONE) {
+            if (packet.header.syncWord[0] == LORA_SYNC_0 && packet.header.syncWord[1] == LORA_SYNC_1) {
+                Serial.printf("LoRa RX: Nodo %d, Tipo 0x%02X, Seq %d\n", packet.header.nodeId, packet.header.dataType, packet.header.pktIndex);
+                
+                size_t packetLen = radio.getPacketLength();
+                size_t payloadLen = packetLen - sizeof(LoRaHeader);
+
+                if (packet.header.dataType == LORA_TYPE_SENSOR) {
+                    tft.fillRect(0, 40, 160, 15, TFT_BLACK); // Zona de Eventos
+                    tft.setCursor(0, 40);
+                    tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+                    tft.printf("RX: SENSOR (%d)\n", packet.header.nodeId);
+                    
+                    SensorPayload* sp = (SensorPayload*)packet.payload;
+                    forwardSensorData(packet.header.nodeId, sp);
+                }
+                else if (packet.header.dataType >= LORA_TYPE_IMG_START && packet.header.dataType <= LORA_TYPE_IMG_END) {
+                    if(packet.header.dataType == LORA_TYPE_IMG_START) {
+                       tft.fillRect(0, 40, 160, 15, TFT_BLACK); // Zona de Eventos
+                       tft.setCursor(0, 40);
+                       tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
+                       tft.printf("RX: IMG (%d)\n", packet.header.nodeId);
+                    }
+                    handleImageFragment(&packet, payloadLen);
+                }
+            }
+        }
+        radio.startReceive(); 
+    }
+}
+
+void loop() {
+  smartDelay(10); 
+  handleLoRa();
 }

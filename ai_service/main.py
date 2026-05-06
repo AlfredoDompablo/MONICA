@@ -2,7 +2,7 @@ import os
 import uuid
 import cv2
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from ultralytics import YOLO
 import boto3
 from botocore.client import Config
@@ -44,12 +44,21 @@ async def process_image(
     node_id: str = Form(...)
 ):
     if model is None:
-        return {"error": "Modelo no cargado"}, 500
+        raise HTTPException(status_code=500, detail="Modelo no cargado")
 
     # Leer imagen
     contents = await file.read()
+    
+    # DEBUG: Guardar la imagen cruda para inspección
+    with open("debug_image.jpg", "wb") as f:
+        f.write(contents)
+        
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if img is None:
+        raise HTTPException(status_code=400, detail="No se pudo decodificar la imagen (corrupta o formato invalido)")
+        
     img_orig = img.copy()
 
     # Ejecutar Inferencia
