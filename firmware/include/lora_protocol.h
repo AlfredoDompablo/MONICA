@@ -3,24 +3,48 @@
 
 #include <stdint.h>
 
+// --- CONFIGURACIÓN DE RADIO LORA (RadioLib SX1262) ---
+#define LORA_FREQUENCY      915.0  // Frecuencia en MHz (ej: 915.0)
+#define LORA_BANDWIDTH      500.0  // Ancho de banda en kHz (125.0, 250.0, 500.0)
+#define LORA_SF             7      // Spreading Factor (SF7 para velocidad, SF9 por defecto)
+#define LORA_CR             8      // Coding Rate (8 significa 4/8)
+#define LORA_SYNC_WORD      0x12   // Sync Word para filtrar redes ajenas
+#define LORA_POWER          10     // Potencia en dBm (hasta 22 dBm)
+#define LORA_PREAMBLE_LEN   8      // Longitud de preámbulo
+#define LORA_TCXO_VOLTAGE   1.6    // Voltaje TCXO
+#define LORA_USE_REGULATOR  false  // false = usa DC-DC (más eficiente), true = usa LDO
+
 #pragma pack(push, 1)
 
 // Tipos de Mensajes
-#define LORA_TYPE_SENSOR    0x01
-#define LORA_TYPE_IMG_START 0x02
-#define LORA_TYPE_IMG_CHUNK 0x03
-#define LORA_TYPE_IMG_END   0x04
+enum PacketType : uint8_t {
+    // Comandos (Concentrador -> Nodo)
+    CMD_PING          = 0x10,
+    CMD_REQ_TELEMETRY = 0x11,
+    CMD_REQ_IMAGE     = 0x12,
+    CMD_REQ_MISSING   = 0x13, // Concentrador -> Nodo (Petición de fragmentos perdidos)
+    
+    // Respuestas (Nodo -> Concentrador)
+    ACK               = 0x20,
+    NACK              = 0x21,
+    DATA_TELEMETRY    = 0x30,
+    DATA_IMG_START    = 0x31,
+    DATA_IMG_CHUNK    = 0x32,
+    DATA_IMG_END      = 0x33
+};
 
 // Secuencia de Sincronización para filtrar ruido
 #define LORA_SYNC_0 0xAA
 #define LORA_SYNC_1 0xBB
 
-// Estructura de cabecera general (6 Bytes)
+// Estructura de cabecera direccional
 struct LoRaHeader {
-    uint8_t syncWord[2]; 
-    uint8_t nodeId;
-    uint8_t dataType;
-    uint16_t pktIndex;
+    uint8_t syncWord[2]; // 0xAA 0xBB
+    uint8_t srcId;       // Origen (0 = Concentrador)
+    uint8_t destId;      // Destino (0 = Concentrador)
+    uint8_t type;        // PacketType
+    uint16_t seqNum;     // Secuencia o Chunk
+    uint8_t ttl;         // Time-To-Live
 };
 
 // Payload de Sensores (25 Bytes)
