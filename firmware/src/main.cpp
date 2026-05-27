@@ -6,7 +6,7 @@
 #include "lora_protocol.h"
 
 // --- Identificador Único de este Nodo Sensor ---
-#define MY_NODE_ID 1
+#define MY_NODE_ID 3
 
 // --- Hardware Definitions ---
 #define VEXT_PIN 3        
@@ -23,6 +23,8 @@
 #define LORA_BUSY 13
 #define LORA_DIO1 14
 
+#define DELAY_TX 200
+
 // --- Pines para ESP32-CAM (Borde) ---
 #define CAM_UART_TX 17
 #define CAM_UART_RX 18
@@ -32,23 +34,19 @@
 TinyGPSPlus gps;
 TFT_eSPI tft = TFT_eSPI(); 
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
-HardwareSerial camSerial(2); // Usar UART2 (UART1 ya lo usa el GPS)
+HardwareSerial camSerial(2);
 
 // --- Variables ---
-unsigned long lastSensorTime = 0;
-const unsigned long sensorInterval = 30000; // 30s
 uint16_t packetSequence = 0;
 
-// --- Cache para Repetidor en Topología Lineal ---
+// --- Cache para Repetidor ---
 struct SeenPacket {
-    uint8_t nodeId;
-    uint8_t dataType;
-    uint16_t pktIndex;
+    uint8_t srcId;
+    uint8_t type;
+    uint16_t seqNum;
 };
 SeenPacket seenBuffer[10];
 int seenCount = 0;
-
-
 
 static void smartDelay(unsigned long ms) {
   unsigned long start = millis();
@@ -60,6 +58,7 @@ static void smartDelay(unsigned long ms) {
 
 void setup() {
   Serial.begin(115200);
+  camSerial.setRxBufferSize(4096);
   camSerial.begin(115200, SERIAL_8N1, CAM_UART_RX, CAM_UART_TX);
   
   pinMode(VEXT_PIN, OUTPUT);
@@ -67,7 +66,7 @@ void setup() {
   pinMode(BACKLIGHT_PIN, OUTPUT);
   digitalWrite(BACKLIGHT_PIN, HIGH);
   pinMode(CAM_EN, OUTPUT);
-  digitalWrite(CAM_EN, LOW); // Cámara apagada por defecto
+  digitalWrite(CAM_EN, LOW);
 
   delay(100);
 
@@ -83,7 +82,17 @@ void setup() {
 
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   tft.println("Iniciando LoRa...");
-  int state = radio.begin(915.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false);
+  int state = radio.begin(
+    LORA_FREQUENCY,
+    LORA_BANDWIDTH,
+    LORA_SF,
+    LORA_CR,
+    LORA_SYNC_WORD,
+    LORA_POWER,
+    LORA_PREAMBLE_LEN,
+    LORA_TCXO_VOLTAGE,
+    LORA_USE_REGULATOR
+  );
   if (state == RADIOLIB_ERR_NONE) {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("LoRa OK!");
@@ -92,18 +101,20 @@ void setup() {
     tft.printf("LoRa Error: %d\n", state);
   }
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  radio.startReceive(); // Inicializar modo de recepción continua para escuchar/repetir
+  radio.startReceive();
 }
 
-void sendSensorTelemetry() {
+void sendSensorTelemetry(uint8_t destId) {
   LoRaPacket packet;
   memset(&packet, 0, sizeof(LoRaPacket));
   
   packet.header.syncWord[0] = LORA_SYNC_0;
   packet.header.syncWord[1] = LORA_SYNC_1;
-  packet.header.nodeId = MY_NODE_ID;
-  packet.header.dataType = LORA_TYPE_SENSOR;
-  packet.header.pktIndex = packetSequence++;
+  packet.header.srcId = MY_NODE_ID;
+  packet.header.destId = destId;
+  packet.header.type = DATA_TELEMETRY;
+  packet.header.seqNum = packetSequence++;
+  packet.header.ttl = 5;
 
   SensorPayload* sp = (SensorPayload*)packet.payload;
   sp->latitude = gps.location.isValid() ? gps.location.lat() : 0.0;
@@ -132,26 +143,62 @@ void sendSensorTelemetry() {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.printf("TX Fail: %d\n", state);
   }
-  radio.startReceive(); // CRITICO: Volver a escuchar después de transmitir
+  radio.startReceive();
 }
 
-void requestAndSendImage() {
+bool getChunkFromCam(uint32_t offset, uint32_t len, uint8_t* dest) {
+  for (int retry = 0; retry < 3; retry++) {
+      while(camSerial.available()) camSerial.read(); // Limpiar residuales
+      
+      camSerial.printf("GET_CHUNK %u %u\n", offset, len);
+      
+      unsigned long start = millis();
+      uint32_t readBytes = 0;
+      camSerial.setTimeout(500);
+      
+      while (readBytes < len && millis() - start < 800) {
+          size_t readNow = camSerial.readBytes(dest + readBytes, len - readBytes);
+          if (readNow > 0) {
+              readBytes += readNow;
+          } else {
+              delay(2);
+          }
+      }
+      
+      if (readBytes == len) {
+          return true; // ¡Éxito!
+      }
+      Serial.printf("Intento %d: getChunkFromCam falló (leído %u de %u)\n", retry + 1, readBytes, len);
+      delay(50); // Breve espera antes del reintento
+  }
+  return false; // Falló tras 3 intentos
+}
+
+void requestAndSendImage(uint8_t destId) {
+  // Enviar ACK primero para avisar que recibimos el comando y estamos tomando la foto
+  LoRaPacket ackPacket;
+  ackPacket.header.syncWord[0] = LORA_SYNC_0;
+  ackPacket.header.syncWord[1] = LORA_SYNC_1;
+  ackPacket.header.srcId = MY_NODE_ID;
+  ackPacket.header.destId = destId;
+  ackPacket.header.type = ACK;
+  ackPacket.header.seqNum = packetSequence++;
+  ackPacket.header.ttl = 5;
+  radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
+  delay(100);
+
   tft.fillScreen(TFT_BLACK);
   tft.setCursor(0,0);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
   tft.println("Tomando Foto...");
   
-  // 1. Despertar cámara
   digitalWrite(CAM_EN, HIGH);
-  delay(2000); // Dar tiempo a que bootee
+  delay(2000);
   
-  // Limpiar buffer UART
   while(camSerial.available()) camSerial.read();
   
-  // 2. Enviar comando "TAKE_PIC"
   camSerial.println("TAKE_PIC");
   
-  // Esperar el tamaño binario de 4 bytes (uint32_t)
   unsigned long waitStart = millis();
   bool imgIncoming = false;
   uint32_t imgSize = 0;
@@ -163,174 +210,269 @@ void requestAndSendImage() {
     }
   }
 
-  if (!imgIncoming || imgSize <= 0 || imgSize > 100000) { // Max 100KB safe limit
+  if (!imgIncoming || imgSize <= 0 || imgSize > 500000) {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.println("Error: No camara / Size");
     digitalWrite(CAM_EN, LOW);
-    radio.startReceive(); // Volver a escuchar
+    radio.startReceive();
     return;
   }
 
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.printf("Recibiendo %d bytes\n", imgSize);
-
-  // Almacenar toda la imagen en RAM para evitar desbordamiento de UART (Overflow)
-  uint8_t* imgBuffer = (uint8_t*)malloc(imgSize);
-  if (!imgBuffer) {
-     tft.println("Error Malloc RAM!");
-     radio.startReceive(); // Volver a escuchar
-     return;
-  }
-
-  int bytesRead = 0;
-  unsigned long readStart = millis();
-  while(bytesRead < imgSize && millis() - readStart < 10000) {
-      if (camSerial.available()) {
-          imgBuffer[bytesRead++] = camSerial.read();
-      }
-  }
-
-  if (bytesRead < imgSize) {
-     tft.println("Error UART Timeout");
-     free(imgBuffer);
-     radio.startReceive(); // Volver a escuchar
-     return;
-  }
-
+  tft.printf("Size: %u bytes\n", imgSize);
   tft.println("Enviando por LoRa...");
 
-  // 3. Enviar Paquete de Inicio
+  uint16_t totalChunks = (imgSize + LORA_MAX_PAYLOAD - 1) / LORA_MAX_PAYLOAD;
+
   LoRaPacket packet;
   packet.header.syncWord[0] = LORA_SYNC_0;
   packet.header.syncWord[1] = LORA_SYNC_1;
-  packet.header.nodeId = MY_NODE_ID;
-  packet.header.dataType = LORA_TYPE_IMG_START;
-  packet.header.pktIndex = 0;
-  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+  packet.header.srcId = MY_NODE_ID;
+  packet.header.destId = destId;
+  packet.header.type = DATA_IMG_START;
+  packet.header.seqNum = 0;
+  packet.header.ttl = 5;
+  
+  // Copiar tamaño total e información de fragmentación al inicio del streaming
+  memcpy(packet.payload, &imgSize, 4);
+  memcpy(packet.payload + 4, &totalChunks, 2);
+  
+  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
 
-  // CRITICO: Darle tiempo al Concentrador para crear el archivo en su tarjeta SD
-  // y volver a activar su receptor antes de que le caiga el primer Chunk de datos.
   delay(1000);
 
-  // 4. Transmitir en fragmentos desde la RAM
-  packet.header.dataType = LORA_TYPE_IMG_CHUNK;
+  packet.header.type = DATA_IMG_CHUNK;
   uint16_t chunkIndex = 1;
   uint32_t bytesSent = 0;
-  
-  // Calcular paquetes totales
-  uint32_t totalChunks = (imgSize + LORA_MAX_PAYLOAD - 1) / LORA_MAX_PAYLOAD;
 
   tft.fillRect(0, 60, 160, 20, TFT_BLACK);
   tft.setCursor(0, 60);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.printf("0 / %u Chunks", totalChunks);
 
   while(bytesSent < imgSize) {
       uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - bytesSent);
-      memcpy(packet.payload, imgBuffer + bytesSent, chunkLen);
-      packet.header.pktIndex = chunkIndex++;
       
-      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
-      bytesSent += chunkLen;
-      
-      // Mostrar progreso en Chunks en tiempo real absoluto (en cada chunk)
-      tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-      tft.setCursor(0, 60);
-      tft.printf("%u / %u Chunks", (uint32_t)(chunkIndex - 1), totalChunks);
-      
-      // CRITICO: Dar tiempo suficiente al Concentrador para guardar el chunk en su SD
-      // y volver a activar su modo recepción. Si es muy rápido, el concentrador se queda sordo.
-      delay(150); 
-      Serial.printf("Chunk %d enviado (%d / %d)\n", chunkIndex - 1, bytesSent, imgSize);
+      // Obtener el fragmento de la cámara dinámicamente en lugar de leer del heap
+      if (getChunkFromCam(bytesSent, chunkLen, packet.payload)) {
+          packet.header.seqNum = chunkIndex;
+          radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
+          bytesSent += chunkLen;
+          
+          tft.fillRect(0, 60, 160, 20, TFT_BLACK);
+          tft.setCursor(0, 60);
+          tft.printf("%u / %u Chunks", (uint32_t)(chunkIndex - 1), totalChunks);
+          
+          delay(DELAY_TX); 
+      } else {
+          tft.fillRect(0, 60, 160, 20, TFT_BLACK);
+          tft.setCursor(0, 60);
+          tft.setTextColor(TFT_RED, TFT_BLACK);
+          tft.printf("Err Cam Chunk %u", chunkIndex);
+          Serial.printf("Error UART: Omitiendo chunk %u tras fallar todos los reintentos UART\n", chunkIndex);
+          // Omitimos este chunk (no incrementamos bytesSent ni transmitimos). 
+          // El concentrador lo detectará como perdido y lo pedirá en la fase de NACK.
+          delay(100);
+      }
+      chunkIndex++; // Mantener la consistencia del índice de secuencia
   }
 
-  // 5. Enviar Fin
-  // Pausa MUY larga antes del paquete final para asegurar que la SD terminó de escribir el último chunk
   delay(500); 
   
-  packet.header.dataType = LORA_TYPE_IMG_END;
-  packet.header.pktIndex = chunkIndex;
-  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+  packet.header.type = DATA_IMG_END;
+  packet.header.seqNum = chunkIndex;
+  memcpy(packet.payload, &imgSize, 4);
+  memcpy(packet.payload + 4, &totalChunks, 2);
+  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
 
-  free(imgBuffer); // Liberar memoria RAM
-
+  // Entrar en bucle de recuperación de fragmentos perdidos
   tft.fillRect(0, 60, 160, 20, TFT_BLACK);
   tft.setCursor(0, 60);
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.println("Foto Enviada OK");
-  
-  // Apagar cámara
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.println("Esperando Confirm...");
+
+  unsigned long sessionStart = millis();
+  unsigned long lastEndTxTime = millis();
+  radio.startReceive();
+  bool waitingResponse = true;
+  uint8_t endRetryCount = 0;
+
+  while (waitingResponse && millis() - sessionStart < 120000) { // Timeout de seguridad de 120s
+      // Retransmisión periódica de DATA_IMG_END si pasan 4 segundos sin recibir confirmación/petición
+      if (millis() - lastEndTxTime > 4000) {
+          if (endRetryCount < 5) {
+              endRetryCount++;
+              Serial.printf("LoRa Flow: Timeout de confirmación de 4s. Retransmitiendo DATA_IMG_END (intento %u/5)...\n", endRetryCount);
+              
+              packet.header.type = DATA_IMG_END;
+              packet.header.seqNum = chunkIndex;
+              memcpy(packet.payload, &imgSize, 4);
+              memcpy(packet.payload + 4, &totalChunks, 2);
+              radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
+              
+              lastEndTxTime = millis();
+              radio.startReceive();
+          } else {
+              Serial.println("LoRa Flow: Superado el límite de reintentos de DATA_IMG_END. Cancelando espera.");
+              break;
+          }
+      }
+
+      if (digitalRead(LORA_DIO1)) {
+          LoRaPacket rxPacket;
+          int state = radio.readData((uint8_t*)&rxPacket, sizeof(rxPacket));
+          if (state == RADIOLIB_ERR_NONE) {
+              if (rxPacket.header.syncWord[0] == LORA_SYNC_0 && rxPacket.header.syncWord[1] == LORA_SYNC_1) {
+                  if (rxPacket.header.destId == MY_NODE_ID) {
+                      if (rxPacket.header.type == ACK) {
+                          // Concentrador recibió todo sin pérdidas
+                          Serial.println("LoRa Flow: ¡Concentrador reporta 100% recibido! Sesión completada.");
+                          tft.fillRect(0, 60, 160, 20, TFT_BLACK);
+                          tft.setCursor(0, 60);
+                          tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                          tft.println("Confirmado OK!");
+                          waitingResponse = false;
+                      }
+                      else if (rxPacket.header.type == CMD_REQ_MISSING) {
+                          // Hay fragmentos perdidos. Retransmitirlos
+                          uint16_t missingCount = 0;
+                          memcpy(&missingCount, rxPacket.payload, 2);
+                          uint16_t* sequences = (uint16_t*)(rxPacket.payload + 2);
+                          
+                          Serial.printf("LoRa Flow: ¡NACK recibido! %u fragmentos perdidos. Retransmitiendo...\n", missingCount);
+                          tft.fillRect(0, 60, 160, 20, TFT_BLACK);
+                          tft.setCursor(0, 60);
+                          tft.setTextColor(TFT_RED, TFT_BLACK);
+                          tft.printf("NACK: Reenviando %u...", missingCount);
+
+                          packet.header.type = DATA_IMG_CHUNK;
+                          
+                          for (uint16_t i = 0; i < missingCount; i++) {
+                              uint16_t seq = sequences[i];
+                              if (seq <= totalChunks) {
+                                  uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
+                                  uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - offset);
+                                  
+                                  // Solicitar fragmento dinámicamente sobre UART de la cámara
+                                  if (getChunkFromCam(offset, chunkLen, packet.payload)) {
+                                      packet.header.seqNum = seq;
+                                      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
+                                      Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u)\n", seq, offset, chunkLen);
+                                  } else {
+                                      Serial.printf("Fallo al re-solicitar chunk %d a la cámara por UART!\n", seq);
+                                  }
+                                  delay(DELAY_TX);
+                              }
+                          }
+                          
+                          // Enviar DATA_IMG_END de nuevo para cerrar el lote de retransmisión
+                          delay(500);
+                          packet.header.type = DATA_IMG_END;
+                          packet.header.seqNum = chunkIndex;
+                          memcpy(packet.payload, &imgSize, 4);
+                          memcpy(packet.payload + 4, &totalChunks, 2);
+                          radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
+                          
+                          // Reiniciar temporizadores tras transmisión exitosa de fragmentos
+                          sessionStart = millis();
+                          lastEndTxTime = millis();
+                          endRetryCount = 0;
+                          radio.startReceive();
+                      }
+                  }
+              }
+          }
+          radio.startReceive();
+      }
+      delay(10);
+  }
+
+  // Notificar fin de sesión a la cámara para liberar memoria PSRAM
+  camSerial.println("RELEASE_PIC");
   digitalWrite(CAM_EN, LOW);
-  
-  radio.startReceive(); // CRITICO: Volver a modo recepción para escuchar/repetir otros nodos
+  radio.startReceive();
 }
 
-void handleRelay() {
+bool checkSeenAndAdd(uint8_t srcId, uint8_t type, uint16_t seqNum) {
+    for (int i = 0; i < seenCount; i++) {
+        if (seenBuffer[i].srcId == srcId &&
+            seenBuffer[i].type == type &&
+            seenBuffer[i].seqNum == seqNum) {
+            return true; // Ya lo vimos
+        }
+    }
+    // No lo hemos visto, lo agregamos
+    if (seenCount < 10) {
+        seenBuffer[seenCount++] = {srcId, type, seqNum};
+    } else {
+        for (int i = 0; i < 9; i++) seenBuffer[i] = seenBuffer[i+1];
+        seenBuffer[9] = {srcId, type, seqNum};
+    }
+    return false;
+}
+
+void handleLoRa() {
   if (digitalRead(LORA_DIO1)) {
     LoRaPacket rxPacket;
     int state = radio.readData((uint8_t*)&rxPacket, sizeof(LoRaPacket));
     
     if (state == RADIOLIB_ERR_NONE) {
       if (rxPacket.header.syncWord[0] == LORA_SYNC_0 && rxPacket.header.syncWord[1] == LORA_SYNC_1) {
-        // Solo repetir nodos que estén más lejos (ID mayor que el nuestro)
-        if (rxPacket.header.nodeId > MY_NODE_ID) {
-          // Verificar si ya lo hemos procesado y reenviado para evitar bucles infinitos
-          bool alreadyForwarded = false;
-          for (int i = 0; i < seenCount; i++) {
-            if (seenBuffer[i].nodeId == rxPacket.header.nodeId &&
-                seenBuffer[i].dataType == rxPacket.header.dataType &&
-                seenBuffer[i].pktIndex == rxPacket.header.pktIndex) {
-              alreadyForwarded = true;
-              break;
+        
+        // TTL Check
+        if (rxPacket.header.ttl > 0) {
+            rxPacket.header.ttl--;
+            
+            // ¿Es para mí?
+            if (rxPacket.header.destId == MY_NODE_ID) {
+                // Prevenir procesamiento duplicado
+                if (!checkSeenAndAdd(rxPacket.header.srcId, rxPacket.header.type, rxPacket.header.seqNum)) {
+                    Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n", rxPacket.header.type, rxPacket.header.srcId);
+                    
+                    if (rxPacket.header.type == CMD_REQ_TELEMETRY) {
+                        sendSensorTelemetry(rxPacket.header.srcId);
+                    } 
+                    else if (rxPacket.header.type == CMD_REQ_IMAGE) {
+                        requestAndSendImage(rxPacket.header.srcId);
+                    }
+                }
+            } 
+            // ¿Debo retransmitir (Enrutamiento Lineal)?
+            else if (rxPacket.header.ttl > 0) {
+                bool shouldRelay = false;
+                
+                // Downstream: Origen < Mi ID, y Destino > Mi ID
+                if (rxPacket.header.srcId < MY_NODE_ID && rxPacket.header.destId > MY_NODE_ID) {
+                    shouldRelay = true;
+                }
+                // Upstream: Origen > Mi ID, y Destino < Mi ID
+                else if (rxPacket.header.srcId > MY_NODE_ID && rxPacket.header.destId < MY_NODE_ID) {
+                    shouldRelay = true;
+                }
+                
+                if (shouldRelay) {
+                    if (!checkSeenAndAdd(rxPacket.header.srcId, rxPacket.header.type, rxPacket.header.seqNum)) {
+                        size_t packetLen = radio.getPacketLength();
+                        
+                        tft.fillScreen(TFT_BLACK);
+                        tft.setCursor(0, 0);
+                        tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+                        tft.printf("Relay S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
+                        tft.printf("Type 0x%02X\n", rxPacket.header.type);
+                        
+                        radio.transmit((uint8_t*)&rxPacket, packetLen);
+                        radio.startReceive();
+                        Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
+                    }
+                }
             }
-          }
-          
-          if (!alreadyForwarded) {
-            // Guardar en caché de vistos
-            if (seenCount < 10) {
-              seenBuffer[seenCount++] = {rxPacket.header.nodeId, rxPacket.header.dataType, rxPacket.header.pktIndex};
-            } else {
-              for (int i = 0; i < 9; i++) seenBuffer[i] = seenBuffer[i+1];
-              seenBuffer[9] = {rxPacket.header.nodeId, rxPacket.header.dataType, rxPacket.header.pktIndex};
-            }
-            
-            // Obtener la longitud del paquete recibido
-            size_t packetLen = radio.getPacketLength();
-            
-            tft.fillScreen(TFT_BLACK);
-            tft.setCursor(0, 0);
-            tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-            tft.printf("Relay Node %d\n", rxPacket.header.nodeId);
-            tft.printf("Type 0x%02X Seq %d\n", rxPacket.header.dataType, rxPacket.header.pktIndex);
-            
-            // Transmitir (repetir) el paquete tal cual
-            radio.transmit((uint8_t*)&rxPacket, packetLen);
-            
-            // Volver de inmediato a modo recepción continua
-            radio.startReceive();
-            
-            Serial.printf("Relay OK: Nodo %d, Tipo 0x%02X, Seq %d\n", rxPacket.header.nodeId, rxPacket.header.dataType, rxPacket.header.pktIndex);
-          }
         }
       }
     }
-    // Asegurar que el receptor sigue activo pase lo que pase
     radio.startReceive();
   }
 }
 
 void loop() {
-  smartDelay(50); // Delay más pequeño para capturar interrupciones rápido
-  
-  handleRelay(); // Escuchar y repetir paquetes de nodos hijos en topología lineal
-  
-  if (millis() - lastSensorTime > sensorInterval) {
-    sendSensorTelemetry();
-    
-    // Para propósitos de demostración, enviamos la imagen justo después de los sensores
-    delay(2000);
-    requestAndSendImage();
-    
-    lastSensorTime = millis();
-  }
+  smartDelay(10);
+  handleLoRa();
 }
