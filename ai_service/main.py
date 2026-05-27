@@ -119,7 +119,7 @@ async def process_image(
         "image_masked": key_mask,
         "coverage_percent": coverage_percent,
         "confidence": round(confidence, 2),
-        "model_version": "YOLOv11-seg-MONICA"
+        "model_version": "YOLOv8m-seg"
     }
 
 if __name__ == "__main__":

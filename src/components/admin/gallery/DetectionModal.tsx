@@ -15,9 +15,21 @@ export default function DetectionModal({ detection, onClose }: DetectionModalPro
     const originalUrl = `/api/waste-detections/${detection.detection_id}/image?type=original`;
     const maskedUrl = `/api/waste-detections/${detection.detection_id}/image?type=masked`;
 
+    const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (e.target === e.currentTarget) {
+            onClose();
+        }
+    };
+
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
+        <div 
+            onClick={handleOverlayClick}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300 cursor-pointer"
+        >
+            <div 
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col md:flex-row animate-in zoom-in-95 duration-300 cursor-default"
+            >
                 
                 {/* Left Side: Interactive Gallery */}
                 <div className="flex-1 bg-gray-900 p-4 flex items-center justify-center min-h-[300px]">
