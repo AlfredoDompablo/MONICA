@@ -54,3 +54,8 @@ firmware/include/secrets.h
 firmware_concentrator/include/secrets.h
 !firmware_concentrator/include/secrets.example.h
 .pio
+
+# Debug/Temp files and scratch scripts
+ai_service/debug_image.jpg
+scripts/cleanup_photos.ts
+scripts/upload_photo.ts
