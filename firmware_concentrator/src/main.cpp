@@ -36,7 +36,7 @@
 // --- Objects ---
 TinyGPSPlus gps;
 TFT_eSPI tft = TFT_eSPI(); 
-SPIClass spiSD(HSPI); // Secondary SPI bus for SD
+SPIClass* spiSD = nullptr; // Secondary SPI bus for SD
 
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
@@ -53,12 +53,22 @@ bool* chunkReceived = NULL;
 uint16_t totalChunks = 0;
 uint32_t imgSize = 0;
 
-// Polling Demo Variables
+// Polling Demo Variables and Reliability State Machine
 unsigned long lastPollTime = 0;
 const unsigned long pollInterval = 30000; // Poll every 30s
-uint8_t targetNode = 1; // Alternar entre nodos (ej. 1 y 2)
+uint8_t targetNode = 1; // Alternar entre nodos (ej. 1 al 4)
 bool pollForImage = false; // Alternar entre telemetría e imagen
 uint16_t packetSequence = 0;
+
+enum PollingState {
+    POLL_STATE_IDLE,
+    POLL_STATE_WAITING_RESPONSE
+};
+PollingState pollState = POLL_STATE_IDLE;
+uint8_t currentAttempt = 0;
+unsigned long requestSentTime = 0;
+unsigned long currentTimeout = 3000; // 3s para telemetría, 6s para imagen
+volatile bool responseReceived = false;
 
 // --- Custom Stream Class for Base64 Encoding on the fly ---
 class ImagePayloadStream : public Stream {
@@ -162,7 +172,8 @@ public:
 static void smartDelay(unsigned long ms) {
   unsigned long start = millis();
   do {
-    while (Serial1.available())
+    int maxBytes = 50; // Evitar lazos infinitos por ruido en pin RX flotante
+    while (Serial1.available() && maxBytes-- > 0)
       gps.encode(Serial1.read());
   } while (millis() - start < ms);
 }
@@ -191,6 +202,7 @@ void setup() {
 
   // LoRa SPI & Init
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+  Serial.println("Iniciando transceptor LoRa SX1262 del Concentrador...");
   tft.println("Iniciando LoRa...");
   int state = radio.begin(
     LORA_FREQUENCY,
@@ -206,17 +218,19 @@ void setup() {
   if (state == RADIOLIB_ERR_NONE) {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("LoRa OK!");
+    Serial.println("LoRa SX1262: INICIALIZADO CON EXITO [OK]");
   } else {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.print("Error LoRa: "); tft.println(state);
+    Serial.printf("[ERROR] Fallo al iniciar LoRa SX1262. Codigo: %d\n", state);
   }
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
   // SD Card
   tft.setTextSize(1);
-  tft.println("Montando SD...");
-  spiSD.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  if (!SD.begin(SD_CS, spiSD)) {
+  spiSD = new SPIClass(HSPI);
+  spiSD->begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS, *spiSD)) {
     Serial.println("Fallo al montar SD!");
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.println("Error: SD Card!");
@@ -451,9 +465,11 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             ackPacket.header.syncWord[1] = LORA_SYNC_1;
             ackPacket.header.srcId = MY_NODE_ID; // 0
             ackPacket.header.destId = packet->header.srcId;
+            ackPacket.header.nextHopId = 1; // Siguiente salto es el Nodo 1
             ackPacket.header.type = ACK;
             ackPacket.header.seqNum = packetSequence++;
             ackPacket.header.ttl = 5;
+            delay(80); // Retardo mínimo para batería (gracia de RF)
             radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
             radio.startReceive();
             return;
@@ -505,6 +521,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             nackPacket.header.syncWord[1] = LORA_SYNC_1;
             nackPacket.header.srcId = MY_NODE_ID; // 0
             nackPacket.header.destId = packet->header.srcId;
+            nackPacket.header.nextHopId = 1; // Siguiente salto es el Nodo 1
             nackPacket.header.type = CMD_REQ_MISSING;
             nackPacket.header.seqNum = packetSequence++;
             nackPacket.header.ttl = 5;
@@ -512,6 +529,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             memcpy(nackPacket.payload, &missingCount, 2);
             memcpy(nackPacket.payload + 2, firstMissing, missingCount * 2);
             
+            delay(80); // Retardo mínimo para batería (gracia de RF)
             radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
             radio.startReceive();
             return;
@@ -532,9 +550,11 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         ackPacket.header.syncWord[1] = LORA_SYNC_1;
         ackPacket.header.srcId = MY_NODE_ID; // 0
         ackPacket.header.destId = packet->header.srcId;
+        ackPacket.header.nextHopId = 1; // Siguiente salto es el Nodo 1
         ackPacket.header.type = ACK;
         ackPacket.header.seqNum = packetSequence++;
         ackPacket.header.ttl = 5;
+        delay(80); // Retardo mínimo para batería (gracia de RF)
         radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
         radio.startReceive();
 
@@ -621,6 +641,7 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     packet.header.syncWord[1] = LORA_SYNC_1;
     packet.header.srcId = MY_NODE_ID; // 0
     packet.header.destId = nodeToPoll;
+    packet.header.nextHopId = 1; // El Concentrador siempre habla directamente con el Nodo 1
     packet.header.type = cmd;
     packet.header.seqNum = packetSequence++;
     packet.header.ttl = 5;
@@ -631,8 +652,8 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     if(cmd == CMD_REQ_TELEMETRY) tft.printf("Poll Sensor -> Nodo %d", nodeToPoll);
     else tft.printf("Poll Imagen -> Nodo %d", nodeToPoll);
 
-    radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
-    Serial.printf("Polling Node %d with CMD 0x%02X\n", nodeToPoll, cmd);
+    int txState = radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+    Serial.printf("Polling Node %d with CMD 0x%02X, TX State: %d\n", nodeToPoll, cmd, txState);
     radio.startReceive();
 }
 
@@ -643,6 +664,12 @@ void handleLoRa() {
         
         if (state == RADIOLIB_ERR_NONE) {
             if (packet.header.syncWord[0] == LORA_SYNC_0 && packet.header.syncWord[1] == LORA_SYNC_1) {
+                // Es físicamente para mí en este salto?
+                if (packet.header.nextHopId != MY_NODE_ID) {
+                    radio.startReceive();
+                    return;
+                }
+                
                 // Es para mí?
                 if (packet.header.destId == MY_NODE_ID) {
                     Serial.printf("LoRa RX: Src %d, Tipo 0x%02X, Seq %d\n", packet.header.srcId, packet.header.type, packet.header.seqNum);
@@ -658,6 +685,10 @@ void handleLoRa() {
                         
                         SensorPayload* sp = (SensorPayload*)packet.payload;
                         forwardSensorData(packet.header.srcId, sp);
+                        
+                        if (packet.header.srcId == targetNode && !pollForImage) {
+                            responseReceived = true;
+                        }
                     }
                     else if (packet.header.type >= DATA_IMG_START && packet.header.type <= DATA_IMG_END) {
                         if(packet.header.type == DATA_IMG_START) {
@@ -665,6 +696,10 @@ void handleLoRa() {
                            tft.setCursor(0, 40);
                            tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
                            tft.printf("RX: IMG (%d)\n", packet.header.srcId);
+                           
+                           if (packet.header.srcId == targetNode && pollForImage) {
+                               responseReceived = true;
+                           }
                         }
                         handleImageFragment(&packet, payloadLen);
                     }
@@ -673,6 +708,10 @@ void handleLoRa() {
                         tft.setCursor(0, 40);
                         tft.setTextColor(TFT_GREEN, TFT_BLACK);
                         tft.printf("ACK Nodo %d\n", packet.header.srcId);
+                        
+                        if (packet.header.srcId == targetNode && pollForImage) {
+                            responseReceived = true;
+                        }
                     }
                 }
             }
@@ -682,6 +721,11 @@ void handleLoRa() {
 }
 
 void loop() {
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 5000) {
+    Serial.println("[HEARTBEAT] Concentrador ejecutando loop...");
+    lastHeartbeat = millis();
+  }
   smartDelay(10); 
   handleLoRa();
   
@@ -704,23 +748,72 @@ void loop() {
       tft.println("Img Timeout!");
   }
   
-  // Lógica de Polling Automático (Demostración de On-Demand)
+  // Lógica de Polling Automático Altamente Confiable con 3 Intentos de Retransmisión
   // Solo hacer polling si no estamos recibiendo activamente una imagen (expectedSeqNum == 0)
-  if (expectedSeqNum == 0 && (millis() - lastPollTime > pollInterval)) {
-      PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
-      pollNode(targetNode, cmd);
-      
-      // Rotar lógica para la próxima vez
-      if (pollForImage) {
-          // Ya pedimos imagen, cambiar de nodo y pedir telemetría
-          targetNode++;
-          if (targetNode > 3) targetNode = 1; // Suponiendo max 2 nodos en demo
-          pollForImage = false;
-      } else {
-          // Ya pedimos telemetría, ahora pedir imagen al mismo nodo
-          pollForImage = true;
+  if (expectedSeqNum == 0) {
+      if (pollState == POLL_STATE_IDLE) {
+          if (millis() - lastPollTime > pollInterval) {
+              responseReceived = false;
+              currentAttempt = 1;
+              requestSentTime = millis();
+              currentTimeout = pollForImage ? 6000 : 3500; // 6s para imagen (foto), 3.5s para telemetría
+              pollState = POLL_STATE_WAITING_RESPONSE;
+              
+              PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
+              pollNode(targetNode, cmd);
+          }
       }
-      
-      lastPollTime = millis();
+      else if (pollState == POLL_STATE_WAITING_RESPONSE) {
+          if (responseReceived) {
+              Serial.printf("LoRa Flow: Respuesta exitosa recibida del Nodo %d en intento %d.\n", targetNode, currentAttempt);
+              
+              // Rotar lógica para el próximo ciclo
+              if (pollForImage) {
+                  targetNode++;
+                  if (targetNode > 4) targetNode = 1;
+                  pollForImage = false;
+              } else {
+                  pollForImage = true;
+              }
+              
+              pollState = POLL_STATE_IDLE;
+              lastPollTime = millis();
+          }
+          else if (millis() - requestSentTime > currentTimeout) {
+              if (currentAttempt < 3) {
+                  currentAttempt++;
+                  Serial.printf("LoRa Flow: Timeout! Re-intentando peticion al Nodo %d (Intento %d/3)...\n", targetNode, currentAttempt);
+                  
+                  tft.fillRect(0, 80, 160, 20, TFT_BLACK);
+                  tft.setCursor(0, 80);
+                  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+                  tft.printf("Reintentando %d... %d/3", targetNode, currentAttempt);
+                  
+                  PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
+                  pollNode(targetNode, cmd);
+                  
+                  requestSentTime = millis();
+              } else {
+                  Serial.printf("LoRa Flow: [FALLO] Sin respuesta del Nodo %d tras 3 intentos. Pasando al siguiente.\n", targetNode);
+                  
+                  tft.fillRect(0, 80, 160, 20, TFT_BLACK);
+                  tft.setCursor(0, 80);
+                  tft.setTextColor(TFT_RED, TFT_BLACK);
+                  tft.printf("Fallo Nodo %d (3 reintentos)", targetNode);
+                  
+                  // Rotar de todas formas para no quedar bloqueados
+                  if (pollForImage) {
+                      targetNode++;
+                      if (targetNode > 4) targetNode = 1;
+                      pollForImage = false;
+                  } else {
+                      pollForImage = true;
+                  }
+                  
+                  pollState = POLL_STATE_IDLE;
+                  lastPollTime = millis();
+              }
+          }
+      }
   }
 }
