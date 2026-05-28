@@ -7,7 +7,7 @@
 #define LORA_FREQUENCY      915.0  // Frecuencia en MHz (ej: 915.0)
 #define LORA_BANDWIDTH      500.0  // Ancho de banda en kHz (125.0, 250.0, 500.0)
 #define LORA_SF             7      // Spreading Factor (SF7 para velocidad, SF9 por defecto)
-#define LORA_CR             8      // Coding Rate (8 significa 4/8)
+#define LORA_CR             5      // Coding Rate (5 significa 4/5 para menor Time-on-Air)
 #define LORA_SYNC_WORD      0x12   // Sync Word para filtrar redes ajenas
 #define LORA_POWER          10     // Potencia en dBm (hasta 22 dBm)
 #define LORA_PREAMBLE_LEN   8      // Longitud de preámbulo
@@ -42,6 +42,7 @@ struct LoRaHeader {
     uint8_t syncWord[2]; // 0xAA 0xBB
     uint8_t srcId;       // Origen (0 = Concentrador)
     uint8_t destId;      // Destino (0 = Concentrador)
+    uint8_t nextHopId;   // Siguiente salto físico inmediato
     uint8_t type;        // PacketType
     uint16_t seqNum;     // Secuencia o Chunk
     uint8_t ttl;         // Time-To-Live
