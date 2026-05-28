@@ -6,7 +6,7 @@
 #include "lora_protocol.h"
 
 // --- Identificador Único de este Nodo Sensor ---
-#define MY_NODE_ID 3
+#define MY_NODE_ID 4
 
 // --- Hardware Definitions ---
 #define VEXT_PIN 3        
@@ -23,7 +23,17 @@
 #define LORA_BUSY 13
 #define LORA_DIO1 14
 
-#define DELAY_TX 200
+// --- Tiempos de Transmisión Dinámicos según la distancia (Hops) al Concentrador ---
+// Cada salto adicional necesita tiempo para que el repetidor propague el paquete anterior sin colisiones.
+#if MY_NODE_ID == 1
+  #define DELAY_TX 120
+#elif MY_NODE_ID == 2
+  #define DELAY_TX 350
+#elif MY_NODE_ID == 3
+  #define DELAY_TX 650
+#else
+  #define DELAY_TX 950 // Pacing ultra seguro para 4 saltos
+#endif
 
 // --- Pines para ESP32-CAM (Borde) ---
 #define CAM_UART_TX 17
@@ -51,7 +61,8 @@ int seenCount = 0;
 static void smartDelay(unsigned long ms) {
   unsigned long start = millis();
   do {
-    while (Serial1.available())
+    int maxBytes = 50; // Evitar lazos infinitos por ruido en pin RX flotante
+    while (Serial1.available() && maxBytes-- > 0)
       gps.encode(Serial1.read());
   } while (millis() - start < ms);
 }
@@ -78,9 +89,14 @@ void setup() {
   tft.setCursor(0, 0);
   tft.println("Sensor Node Init");
 
+  Serial.printf("\n====================================\n");
+  Serial.printf("INICIANDO NODO SENSOR, ID: %d\n", MY_NODE_ID);
+  Serial.printf("====================================\n");
+
   Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
 
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+  Serial.println("Iniciando transceptor LoRa SX1262...");
   tft.println("Iniciando LoRa...");
   int state = radio.begin(
     LORA_FREQUENCY,
@@ -96,12 +112,15 @@ void setup() {
   if (state == RADIOLIB_ERR_NONE) {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("LoRa OK!");
+    Serial.println("LoRa SX1262: INICIALIZADO CON EXITO [OK]");
   } else {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.printf("LoRa Error: %d\n", state);
+    Serial.printf("[ERROR] Fallo al iniciar LoRa SX1262. Codigo: %d\n", state);
   }
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   radio.startReceive();
+  Serial.println("Transceptor LoRa en modo escucha. Nodo Listo!");
 }
 
 void sendSensorTelemetry(uint8_t destId) {
@@ -112,6 +131,7 @@ void sendSensorTelemetry(uint8_t destId) {
   packet.header.syncWord[1] = LORA_SYNC_1;
   packet.header.srcId = MY_NODE_ID;
   packet.header.destId = destId;
+  packet.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
   packet.header.type = DATA_TELEMETRY;
   packet.header.seqNum = packetSequence++;
   packet.header.ttl = 5;
@@ -128,10 +148,25 @@ void sendSensorTelemetry(uint8_t destId) {
 
   size_t packetSize = sizeof(LoRaHeader) + sizeof(SensorPayload);
   
+  uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+  
   tft.fillScreen(TFT_BLACK);
-  tft.setCursor(0,0);
+  tft.setCursor(0, 10);
+  tft.setTextSize(1);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.println("Enviando Telemetria...");
+  tft.println(">>> TRANSMITIENDO <<<");
+  
+  tft.setCursor(0, 30);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.printf(" [*N%d*]", MY_NODE_ID);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.printf(" -> [N%d]\n", nextHop);
+  
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setCursor(0, 55);
+  tft.printf("Telemetry a %d", destId);
   
   int state = radio.transmit((uint8_t*)&packet, packetSize);
   
@@ -181,6 +216,7 @@ void requestAndSendImage(uint8_t destId) {
   ackPacket.header.syncWord[1] = LORA_SYNC_1;
   ackPacket.header.srcId = MY_NODE_ID;
   ackPacket.header.destId = destId;
+  ackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
   ackPacket.header.type = ACK;
   ackPacket.header.seqNum = packetSequence++;
   ackPacket.header.ttl = 5;
@@ -218,9 +254,25 @@ void requestAndSendImage(uint8_t destId) {
     return;
   }
 
+  uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+
+  tft.fillScreen(TFT_BLACK);
+  tft.setCursor(0, 10);
+  tft.setTextSize(1);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.printf("Size: %u bytes\n", imgSize);
-  tft.println("Enviando por LoRa...");
+  tft.println(">>> ENVIANDO IMAGEN <<<");
+  
+  tft.setCursor(0, 30);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.printf(" [*N%d*]", MY_NODE_ID);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.printf(" -> [N%d]\n", nextHop);
+  
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setCursor(0, 55);
+  tft.printf("Size: %.1fKB", imgSize / 1024.0);
 
   uint16_t totalChunks = (imgSize + LORA_MAX_PAYLOAD - 1) / LORA_MAX_PAYLOAD;
 
@@ -229,6 +281,7 @@ void requestAndSendImage(uint8_t destId) {
   packet.header.syncWord[1] = LORA_SYNC_1;
   packet.header.srcId = MY_NODE_ID;
   packet.header.destId = destId;
+  packet.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
   packet.header.type = DATA_IMG_START;
   packet.header.seqNum = 0;
   packet.header.ttl = 5;
@@ -269,8 +322,9 @@ void requestAndSendImage(uint8_t destId) {
           tft.setTextColor(TFT_RED, TFT_BLACK);
           tft.printf("Err Cam Chunk %u", chunkIndex);
           Serial.printf("Error UART: Omitiendo chunk %u tras fallar todos los reintentos UART\n", chunkIndex);
-          // Omitimos este chunk (no incrementamos bytesSent ni transmitimos). 
-          // El concentrador lo detectará como perdido y lo pedirá en la fase de NACK.
+          // Omitimos este chunk incrementando bytesSent para mantener la consistencia del offset.
+          // El concentrador lo detectará como perdido porque faltará esta secuencia y lo pedirá en la fase de NACK.
+          bytesSent += chunkLen;
           delay(100);
       }
       chunkIndex++; // Mantener la consistencia del índice de secuencia
@@ -322,6 +376,11 @@ void requestAndSendImage(uint8_t destId) {
           int state = radio.readData((uint8_t*)&rxPacket, sizeof(rxPacket));
           if (state == RADIOLIB_ERR_NONE) {
               if (rxPacket.header.syncWord[0] == LORA_SYNC_0 && rxPacket.header.syncWord[1] == LORA_SYNC_1) {
+                  // Validar que el salto físico sea estrictamente para mí antes de procesar
+                  if (rxPacket.header.nextHopId != MY_NODE_ID) {
+                      radio.startReceive();
+                      continue;
+                  }
                   if (rxPacket.header.destId == MY_NODE_ID) {
                       if (rxPacket.header.type == ACK) {
                           // Concentrador recibió todo sin pérdidas
@@ -413,27 +472,60 @@ bool checkSeenAndAdd(uint8_t srcId, uint8_t type, uint16_t seqNum) {
 void handleLoRa() {
   if (digitalRead(LORA_DIO1)) {
     LoRaPacket rxPacket;
+    size_t packetLen = radio.getPacketLength();
     int state = radio.readData((uint8_t*)&rxPacket, sizeof(LoRaPacket));
+    
+    Serial.printf("[DEBUG LoRa] Evento RX! Estado lectura: %d, Longitud: %u bytes\n", state, packetLen);
     
     if (state == RADIOLIB_ERR_NONE) {
       if (rxPacket.header.syncWord[0] == LORA_SYNC_0 && rxPacket.header.syncWord[1] == LORA_SYNC_1) {
+        Serial.printf("[DEBUG LoRa] Sync OK! Src: %d, Dest: %d, nextHop: %d, Tipo: 0x%02X, TTL: %d\n",
+                      rxPacket.header.srcId, rxPacket.header.destId, rxPacket.header.nextHopId,
+                      rxPacket.header.type, rxPacket.header.ttl);
         
         // TTL Check
         if (rxPacket.header.ttl > 0) {
             rxPacket.header.ttl--;
             
+            // ¿Es físicamente para mí en este salto?
+            if (rxPacket.header.nextHopId != MY_NODE_ID) {
+                Serial.printf("[DEBUG LoRa] Salto Fisico Ignorado: nextHopId (%d) != MY_NODE_ID (%d)\n",
+                              rxPacket.header.nextHopId, MY_NODE_ID);
+                radio.startReceive();
+                return;
+            }
+            
             // ¿Es para mí?
             if (rxPacket.header.destId == MY_NODE_ID) {
-                // Prevenir procesamiento duplicado
-                if (!checkSeenAndAdd(rxPacket.header.srcId, rxPacket.header.type, rxPacket.header.seqNum)) {
-                    Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n", rxPacket.header.type, rxPacket.header.srcId);
-                    
-                    if (rxPacket.header.type == CMD_REQ_TELEMETRY) {
-                        sendSensorTelemetry(rxPacket.header.srcId);
-                    } 
-                    else if (rxPacket.header.type == CMD_REQ_IMAGE) {
-                        requestAndSendImage(rxPacket.header.srcId);
-                    }
+                Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n", rxPacket.header.type, rxPacket.header.srcId);
+                
+                uint8_t prevHop = (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+                
+                tft.fillScreen(TFT_BLACK);
+                tft.setCursor(0, 10);
+                tft.setTextSize(1);
+                tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                tft.println(">>> RECIBIDO (DESTINO) <<<");
+                
+                tft.setCursor(0, 30);
+                tft.setTextSize(1);
+                tft.setTextColor(TFT_WHITE, TFT_BLACK);
+                tft.printf(" [N%d] -> ", prevHop);
+                tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                tft.printf("[*N%d*]\n", MY_NODE_ID);
+                
+                tft.setTextSize(1);
+                tft.setTextColor(TFT_CYAN, TFT_BLACK);
+                tft.setCursor(0, 55);
+                tft.printf("Peticion de: %d", rxPacket.header.srcId);
+                
+                if (rxPacket.header.type == CMD_REQ_TELEMETRY) {
+                    delay(80); // Retardo mínimo para batería (gracia de RF)
+                    sendSensorTelemetry(rxPacket.header.srcId);
+                } 
+                else if (rxPacket.header.type == CMD_REQ_IMAGE) {
+                    delay(80); // Retardo mínimo para batería (gracia de RF)
+                    requestAndSendImage(rxPacket.header.srcId);
                 }
             } 
             // ¿Debo retransmitir (Enrutamiento Lineal)?
@@ -450,19 +542,39 @@ void handleLoRa() {
                 }
                 
                 if (shouldRelay) {
-                    if (!checkSeenAndAdd(rxPacket.header.srcId, rxPacket.header.type, rxPacket.header.seqNum)) {
-                        size_t packetLen = radio.getPacketLength();
-                        
+                    size_t packetLen = radio.getPacketLength();
+                    
+                    bool isUpstream = (rxPacket.header.srcId > MY_NODE_ID && rxPacket.header.destId < MY_NODE_ID);
+                    uint8_t prevHop = isUpstream ? (MY_NODE_ID + 1) : (MY_NODE_ID - 1);
+                    uint8_t nextHop = isUpstream ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+                    
+                    if (rxPacket.header.type != DATA_IMG_CHUNK) {
                         tft.fillScreen(TFT_BLACK);
-                        tft.setCursor(0, 0);
+                        tft.setCursor(0, 10);
+                        tft.setTextSize(1);
                         tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                        tft.printf("Relay S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
-                        tft.printf("Type 0x%02X\n", rxPacket.header.type);
+                        tft.println(">>> REPETIDOR LoRa <<<");
                         
-                        radio.transmit((uint8_t*)&rxPacket, packetLen);
-                        radio.startReceive();
-                        Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
+                        tft.setCursor(0, 30);
+                        tft.setTextSize(1);
+                        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+                        tft.printf(" [N%d] -> ", prevHop);
+                        tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                        tft.printf("[*N%d*]", MY_NODE_ID);
+                        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+                        tft.printf(" -> [N%d]\n", nextHop);
+                        
+                        tft.setTextSize(1);
+                        tft.setTextColor(TFT_CYAN, TFT_BLACK);
+                        tft.setCursor(0, 55);
+                        tft.printf("Origen:%d -> Destino:%d", rxPacket.header.srcId, rxPacket.header.destId);
                     }
+                    
+                    rxPacket.header.nextHopId = nextHop;
+                    delay(40); // Retardo mínimo para batería (40ms backoff)
+                    radio.transmit((uint8_t*)&rxPacket, packetLen);
+                    radio.startReceive();
+                    Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
                 }
             }
         }
@@ -473,6 +585,11 @@ void handleLoRa() {
 }
 
 void loop() {
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 5000) {
+    Serial.printf("[HEARTBEAT] Nodo %d ejecutando loop...\n", MY_NODE_ID);
+    lastHeartbeat = millis();
+  }
   smartDelay(10);
   handleLoRa();
 }
