@@ -2,28 +2,37 @@ import serial
 import threading
 import sys
 import time
+import glob
 from datetime import datetime
 
-ports = ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2", "/dev/ttyACM3"]
+# Descubrimiento automático de todos los puertos /dev/ttyACM* activos
+ports = sorted(glob.glob("/dev/ttyACM*"))
 baudrate = 115200
 
-colors = {
-    "/dev/ttyACM0": "\033[93m", # Yellow (Node 1)
-    "/dev/ttyACM1": "\033[96m", # Cyan (Node 2)
-    "/dev/ttyACM2": "\033[92m", # Green (Node 3 / 4)
-    "/dev/ttyACM3": "\033[95m", # Magenta (Concentrador / Node 0)
-}
+# Paleta de colores rotativa para diferenciar los nodos en consola
+colors = [
+    "\033[93m", # Amarillo (Nodo 1)
+    "\033[96m", # Cian (Nodo 2)
+    "\033[92m", # Verde (Nodo 3)
+    "\033[95m", # Magenta (Concentrador)
+    "\033[94m", # Azul
+    "\033[91m", # Rojo
+]
+colors_map = {}
+for i, port in enumerate(ports):
+    colors_map[port] = colors[i % len(colors)]
+
 reset_color = "\033[0m"
 
 def monitor_port(port):
-    color = colors.get(port, "")
+    color = colors_map.get(port, "")
     while True:
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Intentando conectar a {port}...")
             ser = serial.Serial(port, baudrate, timeout=1)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] {port} CONECTADO con éxito.")
             
-            # Reset chip by toggling DTR and RTS (some boards need this to reboot cleanly)
+            # Forzar reinicio de las placas para ver el proceso de arranque desde el inicio
             ser.dtr = False
             ser.rts = False
             time.sleep(0.1)
@@ -42,13 +51,12 @@ def monitor_port(port):
                     except Exception as e:
                         pass
                 else:
-                    # check if connection is still alive
                     if not ser.is_open:
                         break
         except Exception as e:
-            # Print reconnection error periodically
             time.sleep(2)
 
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Iniciando monitoreo dinámico en los puertos: {ports}")
 threads = []
 for port in ports:
     t = threading.Thread(target=monitor_port, args=(port,), daemon=True)
