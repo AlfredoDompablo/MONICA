@@ -1,35 +1,57 @@
+/**
+ * @file main.cpp
+ * @brief Firmware de Producción - Edición LIGHT (Compacta/Autónoma) para la Cámara ESP32-CAM.
+ * 
+ * Esta versión está específicamente diseñada para nodos remotos de bajo consumo que no requieren
+ * una pantalla OLED de diagnóstico local ni un encoder rotativo. Se enfoca exclusivamente en
+ * proporcionar la comunicación UART de alta velocidad de captura de imagen OV2640 de la manera
+ * más liviana y eficiente en términos de ciclos de reloj y ahorro de energía de batería.
+ * 
+ * Protocolo de Comandos Soportado:
+ *  - "TAKE_PIC"                    ➡️ Dispara la cámara y captura un frame JPG en PSRAM.
+ *  - "GET_CHUNK <offset> <len>"    ➡️ Lee y transmite dinámicamente un fragmento binario de la imagen.
+ *  - "RELEASE_PIC"                 ➡️ Libera el búfer de captura en PSRAM para conservar energía.
+ *  - "SET_RES <val>"               ➡️ Configura dinámicamente la resolución de imagen deseada (0 al 21).
+ */
+
 #include <Arduino.h>
 #include "esp_camera.h"
 
-// Pines Freenove ESP32-S3 WROOM CAM
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM     15
-#define SIOD_GPIO_NUM     4
-#define SIOC_GPIO_NUM     5
-#define Y9_GPIO_NUM       16
-#define Y8_GPIO_NUM       17
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       12
-#define Y5_GPIO_NUM       10
-#define Y4_GPIO_NUM       8
-#define Y3_GPIO_NUM       9
-#define Y2_GPIO_NUM       11
-#define VSYNC_GPIO_NUM    6
-#define HREF_GPIO_NUM     7
-#define PCLK_GPIO_NUM     13
+// --- Asignación de Pines de la Cámara OV2640 (Freenove ESP32-S3 Board) ---
+#define PWDN_GPIO_NUM     -1  // Pin de apagado por hardware (no disponible).
+#define RESET_GPIO_NUM    -1  // Pin de reinicio por hardware (no disponible).
+#define XCLK_GPIO_NUM     15  // Entrada de reloj de la cámara.
+#define SIOD_GPIO_NUM     4   // Bus de datos SCCB (Datos I2C).
+#define SIOC_GPIO_NUM     5   // Bus de reloj SCCB (Reloj I2C).
+#define Y9_GPIO_NUM       16  // Bit de datos 9 de imagen.
+#define Y8_GPIO_NUM       17  // Bit de datos 8 de imagen.
+#define Y7_GPIO_NUM       18  // Bit de datos 7 de imagen.
+#define Y6_GPIO_NUM       12  // Bit de datos 6 de imagen.
+#define Y5_GPIO_NUM       10  // Bit de datos 5 de imagen.
+#define Y4_GPIO_NUM       8   // Bit de datos 4 de imagen.
+#define Y3_GPIO_NUM       9   // Bit de datos 3 de imagen.
+#define Y2_GPIO_NUM       11  // Bit de datos 2 de imagen.
+#define VSYNC_GPIO_NUM    6   // Sincronización vertical.
+#define HREF_GPIO_NUM     7   // Referencia horizontal.
+#define PCLK_GPIO_NUM     13  // Reloj de píxeles de imagen.
 
-// UART con Heltec
-#define HELTEC_UART_RX 41
-#define HELTEC_UART_TX 42
-HardwareSerial heltecSerial(1); // Usamos UART1 para no interferir con el USB
+// --- Conexión de Comunicación Serie UART con Heltec (Master MCU) ---
+#define HELTEC_UART_RX 41     // Pin RX de recepción de comandos.
+#define HELTEC_UART_TX 42     // Pin TX de envío de bytes de foto.
+HardwareSerial heltecSerial(1); // Canal de hardware UART1 dedicado para evitar ruidos de depuración del puerto USB.
 
-sensor_t * s = NULL;
-camera_fb_t * currentFb = NULL;
+// --- Variables de Estado Global ---
+sensor_t * s = NULL;            // Puntero del controlador del sensor físico OV2640.
+camera_fb_t * currentFb = NULL;   // Puntero del Frame Buffer retenido temporalmente en RAM.
 
-// Resolución por defecto (8 = FRAMESIZE_VGA)
+// Resolución de captura JPEG inicial por defecto (8 = FRAMESIZE_VGA)
 int currentFrameSize = 8; 
 
+/**
+ * @brief Obtiene el nombre legible de la resolución según su índice entero de configuración.
+ * @param val Índice de la resolución.
+ * @return Cadena de caracteres con el formato en píxeles.
+ */
 const char* getFrameSizeName(int val) {
   switch(val) {
     case 0: return "96x96";
@@ -60,12 +82,18 @@ const char* getFrameSizeName(int val) {
 
 void takeAndSendPhoto();
 
+/**
+ * @brief Configuración inicial del hardware de la cámara en versión compacta (LIGHT).
+ */
 void setup() {
-  Serial.begin(115200); // Debug por USB
+  Serial.begin(115200); // Puerto USB para depuración local
   Serial.println("\n[SISTEMA] Iniciando firmware de camara (Version LIGHT Standalone)...");
   Serial.flush();
+  
+  // Iniciar la UART serie de alta velocidad
   heltecSerial.begin(115200, SERIAL_8N1, HELTEC_UART_RX, HELTEC_UART_TX);
 
+  // --- CONFIGURACIÓN DE LA CÁMARA OV2640 ---
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -88,11 +116,12 @@ void setup() {
   config.xclk_freq_hz = 12000000;
   config.pixel_format = PIXFORMAT_JPEG;
   
+  // Determinar la locación de búfer física de manera dinámica según la presencia de memoria PSRAM
   if(psramFound()){
     Serial.println("PSRAM DETECTED");
-    config.frame_size = FRAMESIZE_QSXGA; // Reservar buffer máximo nativo en PSRAM
-    config.jpeg_quality = 14;
-    config.fb_count = 2;
+    config.frame_size = FRAMESIZE_QSXGA; // Permite escalamientos dinámicos posteriores
+    config.jpeg_quality = 14;            // Alta fidelidad JPG
+    config.fb_count = 2;                 // Búfer doble para evitar frames corruptos
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
@@ -103,6 +132,7 @@ void setup() {
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
+  // Inicializar biblioteca de cámara de bajo nivel
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
@@ -110,10 +140,11 @@ void setup() {
   }
 
   s = esp_camera_sensor_get();
+  
   // Aplicar resolución inicial por defecto (VGA)
   s->set_framesize(s, (framesize_t)currentFrameSize);
 
-  // Configuraciones base del sensor
+  // Parámetros base estables de captura
   s->set_vflip(s, 0); 
   s->set_brightness(s, 0); 
   s->set_saturation(s, 0); 
@@ -125,14 +156,16 @@ void setup() {
   Serial.println("[SISTEMA] Inicialización de cámara completada. Esperando comandos...");
 }
 
+/**
+ * @brief Bucle principal de escucha de comandos serie.
+ */
 void loop() {
-  // Escuchar comandos UART desde la Heltec
   if (heltecSerial.available()) {
     String cmd = heltecSerial.readStringUntil('\n');
     cmd.trim();
     
+    // Comando 1: Solicitar un fragmento exacto de la foto
     if (cmd.startsWith("GET_CHUNK")) {
-      // Parsear offset y len
       // Formato: "GET_CHUNK <offset> <len>"
       int firstSpace = cmd.indexOf(' ');
       int secondSpace = cmd.indexOf(' ', firstSpace + 1);
@@ -140,10 +173,11 @@ void loop() {
         uint32_t offset = cmd.substring(firstSpace + 1, secondSpace).toInt();
         uint32_t len = cmd.substring(secondSpace + 1).toInt();
         
+        // Escribir ráfaga binaria por la UART si es válida
         if (currentFb && offset + len <= currentFb->len) {
           heltecSerial.write(currentFb->buf + offset, len);
         } else {
-          // Si no hay foto o es inválido, enviar ceros para no colgar la UART
+          // Si no hay foto activa o es inválido, enviar ceros para no colgar la UART receptora
           uint8_t* zeroBuf = (uint8_t*)calloc(len, 1);
           if (zeroBuf) {
             heltecSerial.write(zeroBuf, len);
@@ -152,9 +186,11 @@ void loop() {
         }
       }
     }
+    // Comando 2: Tomar una foto
     else if (cmd == "TAKE_PIC") {
       takeAndSendPhoto();
     }
+    // Comando 3: Liberar el Frame Buffer de PSRAM
     else if (cmd == "RELEASE_PIC") {
       if (currentFb) {
         esp_camera_fb_return(currentFb);
@@ -162,6 +198,7 @@ void loop() {
         Serial.println("[INFO] Foto liberada de PSRAM");
       }
     }
+    // Comando 4: Configurar la resolución dinámicamente sobre la marcha
     else if (cmd.startsWith("SET_RES")) {
       // Formato: "SET_RES <val>" (ej: "SET_RES 21" para QSXGA, "SET_RES 8" para VGA)
       int spaceIdx = cmd.indexOf(' ');
@@ -181,24 +218,35 @@ void loop() {
   }
 }
 
+/**
+ * @brief Captura una foto en la resolución activa de hardware.
+ * 
+ * Flujo:
+ *  1. Libera búferes antiguos para prevenir desbordes de memoria.
+ *  2. Llama al motor de hardware OV2640 `esp_camera_fb_get()`.
+ *  3. Ejecuta validaciones de diagnóstico del fin de imagen JPEG (`FF D9`).
+ *  4. Transmite los 4 bytes de longitud del archivo al maestro.
+ *  5. Retiene el cuadro en la RAM PSRAM para posterior descarga.
+ */
 void takeAndSendPhoto() {
   Serial.printf("[INFO] Petición TAKE_PIC recibida. Capturando en resolución %s...\n", getFrameSizeName(currentFrameSize));
 
-  // Liberar búfer anterior si existiese
+  // Liberar búfer antiguo
   if (currentFb) {
     esp_camera_fb_return(currentFb);
     currentFb = NULL;
   }
 
+  // Capturar
   currentFb = esp_camera_fb_get();
   if (!currentFb) {
     Serial.println("[ERROR] Captura fallida");
     uint32_t zeroSize = 0;
-    heltecSerial.write((uint8_t*)&zeroSize, 4);
+    heltecSerial.write((uint8_t*)&zeroSize, 4); // Responder tamaño 0 ante fallos
     return;
   }
 
-  // Verificar si el marcador FF D9 está presente en el búfer de la cámara
+  // --- ANÁLISIS DE INTEGRIDAD JPEG (EOI - End of Image) ---
   if (currentFb->len >= 2) {
       uint8_t b1 = currentFb->buf[currentFb->len - 2];
       uint8_t b2 = currentFb->buf[currentFb->len - 1];
@@ -217,7 +265,7 @@ void takeAndSendPhoto() {
       }
   }
 
-  // Notificar al Master MCU el tamaño exacto con 4 bytes binarios puros
+  // Escribir 4 bytes en binario del tamaño de la imagen sobre la UART
   uint32_t imgSize = currentFb->len;
   heltecSerial.write((uint8_t*)&imgSize, 4);
   

@@ -1,3 +1,19 @@
+/**
+ * @file main.cpp
+ * @brief Firmware de Producción para los Nodos Sensores de MONICA.
+ * 
+ * Este programa administra la lectura y retransmisión de datos ambientales (ph, oxígeno disuelto,
+ * turbidez, conductividad, temperatura, nivel de batería) y fragmentos de imagen tomados por una
+ * cámara acoplada por puerto serie UART. Cuenta con soporte integrado para enrutamiento lineal 
+ * multi-salto (multi-hop) por hardware LoRa SX1262 y visualización a través de una pantalla TFT.
+ * 
+ * Arquitectura de Red:
+ *   [Concentrador 0] <-> [Nodo 1] <-> [Nodo 2] <-> [Nodo 3] <-> [Nodo 4]
+ * 
+ * Diseñado con mecanismos de optimización de batería (pacing dinámico de colisiones) e inmunidad
+ * a loops infinitos de retransmisión mediante validación estricta del salto físico receptor.
+ */
+
 #include <Arduino.h>
 #include <TinyGPS++.h>
 #include <TFT_eSPI.h>
@@ -6,95 +22,115 @@
 #include "lora_protocol.h"
 
 // --- Identificador Único de este Nodo Sensor ---
+// Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
 #define MY_NODE_ID 4
 
-// --- Hardware Definitions ---
-#define VEXT_PIN 3        
-#define BACKLIGHT_PIN 21  
-#define GNSS_RX_PIN 33    
-#define GNSS_TX_PIN 34    
+// --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
+#define VEXT_PIN 3            // Control del suministro de energía a sensores externos y periféricos.
+#define BACKLIGHT_PIN 21      // Pin de control del brillo de la pantalla TFT.
+#define GNSS_RX_PIN 33        // Pin de recepción UART para el módulo de posicionamiento GNSS (GPS).
+#define GNSS_TX_PIN 34        // Pin de transmisión UART para el módulo de posicionamiento GNSS (GPS).
 
-// --- LoRa SPI Pins ---
-#define LORA_CS   8
-#define LORA_SCK  9
-#define LORA_MOSI 10
-#define LORA_MISO 11
-#define LORA_RST  12
-#define LORA_BUSY 13
-#define LORA_DIO1 14
+// --- Pines del Bus SPI para el Transceptor LoRa (Internos de la placa Heltec) ---
+#define LORA_CS   8           // Chip Select (Selector de Chip SPI).
+#define LORA_SCK  9           // Reloj SPI (Serial Clock).
+#define LORA_MOSI 10          // Salida de Datos SPI (Master Out Slave In).
+#define LORA_MISO 11          // Entrada de Datos SPI (Master In Slave Out).
+#define LORA_RST  12          // Pin de reinicio de hardware del SX1262.
+#define LORA_BUSY 13          // Pin indicador de estado ocupado del chip LoRa.
+#define LORA_DIO1 14          // Pin de interrupción para notificaciones de RX/TX completados.
 
-// --- Tiempos de Transmisión Dinámicos según la distancia (Hops) al Concentrador ---
-// Cada salto adicional necesita tiempo para que el repetidor propague el paquete anterior sin colisiones.
+// --- Tiempos de Transmisión Dinámicos (Pacing) según el número de saltos al Concentrador ---
+// A mayor cantidad de saltos de distancia física, mayor debe ser el tiempo de gracia (pacing)
+// para dar margen a que los nodos repetidores retransmitan el paquete anterior en la línea sin colisionar.
 #if MY_NODE_ID == 1
-  #define DELAY_TX 120
+  #define DELAY_TX 120        // 1 salto al concentrador directo: delay corto.
 #elif MY_NODE_ID == 2
-  #define DELAY_TX 350
+  #define DELAY_TX 350        // 2 saltos al concentrador: delay medio.
 #elif MY_NODE_ID == 3
-  #define DELAY_TX 650
+  #define DELAY_TX 650        // 3 saltos al concentrador: delay largo.
 #else
-  #define DELAY_TX 950 // Pacing ultra seguro para 4 saltos
+  #define DELAY_TX 950        // 4 saltos: pacing ultra seguro y conservador de batería.
 #endif
 
-// --- Pines para ESP32-CAM (Borde) ---
-#define CAM_UART_TX 17
-#define CAM_UART_RX 18
-#define CAM_EN      6
+// --- Pines de Comunicación para la Cámara ESP32-CAM (Puerto Serie UART) ---
+#define CAM_UART_TX 17        // Pin de transmisión de comandos hacia la cámara.
+#define CAM_UART_RX 18        // Pin de recepción de fragmentos de imagen desde la cámara.
+#define CAM_EN      6         // Pin de control de alimentación (Habilitador/Power-On) de la cámara.
 
-// --- Objects ---
-TinyGPSPlus gps;
-TFT_eSPI tft = TFT_eSPI(); 
-SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
-HardwareSerial camSerial(2);
+// --- Instanciación de Objetos Principales ---
+TinyGPSPlus gps;                                                     // Decodificador del protocolo NMEA para geolocalización.
+TFT_eSPI tft = TFT_eSPI();                                           // Controlador gráfico para la pantalla LCD/TFT integrada.
+SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);  // Controlador LoRa SX1262 vía RadioLib.
+HardwareSerial camSerial(2);                                         // Interfaz UART secundaria (Serial2) para transferencias de cámara.
 
-// --- Variables ---
-uint16_t packetSequence = 0;
+// --- Variables de Estado Global ---
+uint16_t packetSequence = 0;                                         // Contador incremental autoincrementado para paquetes LoRa salientes.
 
-// --- Cache para Repetidor ---
+// --- Estructuras y Búferes de Caché del Repetidor ---
 struct SeenPacket {
-    uint8_t srcId;
-    uint8_t type;
-    uint16_t seqNum;
+    uint8_t srcId;       // ID de origen del nodo que generó la transmisión.
+    uint8_t type;        // Tipo del paquete recibido (CMD o DATA).
+    uint16_t seqNum;     // Número de secuencia.
 };
-SeenPacket seenBuffer[10];
-int seenCount = 0;
+SeenPacket seenBuffer[10]; // Registro de historial para evitar bucles infinitos de retransmisión de paquetes ya propagados.
+int seenCount = 0;         // Contador dinámico de elementos almacenados en el búfer circular.
 
+/**
+ * @brief Retardo inteligente que procesa y decodifica las ráfagas GPS NMEA en segundo plano.
+ * @param ms Tiempo en milisegundos que durará la espera.
+ * 
+ * Protege contra bloqueos infinitos limitando el procesamiento a 50 bytes por ciclo de lectura
+ * en caso de que exista ruido electromagnético o flotación en el pin RX de hardware.
+ */
 static void smartDelay(unsigned long ms) {
   unsigned long start = millis();
   do {
-    int maxBytes = 50; // Evitar lazos infinitos por ruido en pin RX flotante
+    int maxBytes = 50; 
     while (Serial1.available() && maxBytes-- > 0)
       gps.encode(Serial1.read());
   } while (millis() - start < ms);
 }
 
-char lastRfActivity[30] = "Ninguna";
-uint8_t simulatedBattery = 95;
+// --- Variables del Panel Gráfico ---
+char lastRfActivity[30] = "Ninguna";  // Cadena formateada para desplegar la última actividad RF en el dashboard.
+uint8_t simulatedBattery = 95;       // Nivel de porcentaje simulado de carga de la batería del dispositivo.
 
+/**
+ * @brief Dibuja la barra de título premium del dashboard.
+ * @param title Cadena de texto a mostrar en el centro de la barra superior.
+ */
 void drawHeader(const char* title) {
-    tft.fillRect(0, 0, 160, 15, tft.color565(0, 51, 102)); // Navy Blue bar
-    tft.drawFastHLine(0, 15, 160, tft.color565(200, 200, 200)); // Silver line
+    tft.fillRect(0, 0, 160, 15, tft.color565(0, 51, 102));      // Fondo Azul Marino.
+    tft.drawFastHLine(0, 15, 160, tft.color565(200, 200, 200)); // Línea de separación Plata.
     tft.setTextColor(TFT_WHITE, tft.color565(0, 51, 102));
     tft.setTextSize(1);
-    tft.setCursor((160 - strlen(title) * 6) / 2, 4); // Centrado
+    tft.setCursor((160 - strlen(title) * 6) / 2, 4);            // Centrado automático de tipografía de ancho fijo.
     tft.print(title);
 }
 
+/**
+ * @brief Renderiza la pantalla principal del panel en modo de bajo solapamiento visual.
+ * 
+ * Implementa una rejilla fija en el eje vertical (Y) utilizando fuentes pequeñas.
+ * Esto asegura que los textos dinámicos no envuelvan ni se sobrepongan entre sí.
+ */
 void drawDashboard() {
     tft.fillScreen(TFT_BLACK);
     
-    // 1. Cabecera (Navy Blue)
+    // 1. Cabecera (Azul Marino Premium)
     char title[25];
     sprintf(title, "MONICA NODO %d", MY_NODE_ID);
     drawHeader(title);
     
-    // 2. Estado Activo (y = 18)
+    // 2. Estado Activo (Fila 1 en Y = 18)
     tft.setCursor(0, 18);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.print("Estado: ");
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     tft.print("ESCUCHANDO");
     
-    // 3. GPS y Camara (y = 28)
+    // 3. Estado de Geolocalización y Conexión de Cámara (Fila 2 en Y = 28)
     tft.setCursor(0, 28);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.print("GPS: ");
@@ -110,7 +146,7 @@ void drawDashboard() {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.print("OK");
     
-    // 4. Bateria y Pacing (y = 38)
+    // 4. Batería y Retardo de Pacing (Fila 3 en Y = 38)
     tft.setCursor(0, 38);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.print("Bat: ");
@@ -119,41 +155,48 @@ void drawDashboard() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.printf(" | Delay: %d", DELAY_TX);
     
-    // Separador (y = 49)
+    // Separador Estético Central (Y = 49)
     tft.drawFastHLine(0, 49, 160, tft.color565(80, 80, 80));
     
-    // 5. Ultima Actividad RF (y = 53)
+    // 5. Última Actividad RF de Diagnóstico (Fila 4 en Y = 53)
     tft.setCursor(0, 53);
     tft.setTextColor(TFT_YELLOW, TFT_BLACK);
     tft.print("Ult. RF: ");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.print(lastRfActivity);
     
-    // Separador Footer (y = 63)
+    // Separador Estético Inferior (Y = 63)
     tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
     
-    // 6. Footer (y = 66)
+    // 6. Pie de Página del Sistema (Fila 5 en Y = 66)
     tft.setCursor(0, 66);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.print("Espera de peticion...");
 }
 
+/**
+ * @brief Configuración inicial del hardware del dispositivo.
+ */
 void setup() {
   Serial.begin(115200);
+  
+  // Reservar suficiente búfer de hardware en RX UART para evitar el desborde y pérdida de bytes de cámara
   camSerial.setRxBufferSize(4096);
   camSerial.begin(115200, SERIAL_8N1, CAM_UART_RX, CAM_UART_TX);
   
+  // Configuración y encendido de reguladores internos de hardware
   pinMode(VEXT_PIN, OUTPUT);
-  digitalWrite(VEXT_PIN, HIGH);
+  digitalWrite(VEXT_PIN, HIGH);       // Activar el bus Vext de alimentación periférica.
   pinMode(BACKLIGHT_PIN, OUTPUT);
-  digitalWrite(BACKLIGHT_PIN, HIGH);
+  digitalWrite(BACKLIGHT_PIN, HIGH);  // Encender retroiluminación de pantalla LCD.
   pinMode(CAM_EN, OUTPUT);
-  digitalWrite(CAM_EN, LOW);
-
+  digitalWrite(CAM_EN, LOW);          // Apagar la cámara al inicio para conservar energía (Batería).
+ 
   delay(100);
 
+  // Inicialización de la Pantalla TFT
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(1);                 // Ajustar orientación horizontal del display.
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(1);
@@ -164,11 +207,14 @@ void setup() {
   Serial.printf("INICIANDO NODO SENSOR, ID: %d\n", MY_NODE_ID);
   Serial.printf("====================================\n");
 
+  // Iniciar la UART GPS para la lectura en segundo plano
   Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
 
+  // Inicializar bus SPI compartido con la pantalla para comunicarse con el módulo LoRa SX1262
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   Serial.println("Iniciando transceptor LoRa SX1262...");
   tft.println("Iniciando LoRa...");
+  
   int state = radio.begin(
     LORA_FREQUENCY,
     LORA_BANDWIDTH,
@@ -180,6 +226,7 @@ void setup() {
     LORA_TCXO_VOLTAGE,
     LORA_USE_REGULATOR
   );
+
   if (state == RADIOLIB_ERR_NONE) {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("LoRa OK!");
@@ -189,27 +236,38 @@ void setup() {
     tft.printf("LoRa Error: %d\n", state);
     Serial.printf("[ERROR] Fallo al iniciar LoRa SX1262. Codigo: %d\n", state);
   }
+  
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  
+  // Colocar el módulo de radio en modo de escucha continua
   radio.startReceive();
   Serial.println("Transceptor LoRa en modo escucha. Nodo Listo!");
   
-  // Mostrar el panel de control permanente
+  // Renderizar la pantalla de operaciones permanente
   drawDashboard();
 }
 
+/**
+ * @brief Genera datos analógicos ambientales y los transmite al Concentrador.
+ * @param destId Identificador único del nodo de destino (normalmente 0, que es el concentrador).
+ */
 void sendSensorTelemetry(uint8_t destId) {
   LoRaPacket packet;
   memset(&packet, 0, sizeof(LoRaPacket));
   
+  // Construir cabecera del protocolo LoRa unificado de MONICA
   packet.header.syncWord[0] = LORA_SYNC_0;
   packet.header.syncWord[1] = LORA_SYNC_1;
   packet.header.srcId = MY_NODE_ID;
   packet.header.destId = destId;
+  
+  // Enrutamiento Lineal: Si viaja al concentrador (hacia ID menor), el siguiente salto físico es mi ID - 1
   packet.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
   packet.header.type = DATA_TELEMETRY;
   packet.header.seqNum = packetSequence++;
-  packet.header.ttl = 5;
+  packet.header.ttl = 5; // Evita la propagación perpetua de ruido en el aire
 
+  // Cargar payload de sensores con lecturas ambientales
   SensorPayload* sp = (SensorPayload*)packet.payload;
   sp->latitude = gps.location.isValid() ? gps.location.lat() : 0.0;
   sp->longitude = gps.location.isValid() ? gps.location.lng() : 0.0;
@@ -221,9 +279,9 @@ void sendSensorTelemetry(uint8_t destId) {
   sp->battery_level = random(80, 100);
 
   size_t packetSize = sizeof(LoRaHeader) + sizeof(SensorPayload);
-  
   uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
   
+  // Actualizar pantalla temporalmente con información de ruteo
   char headerTitle[30];
   sprintf(headerTitle, "NODO %d - TELEMETRIA", MY_NODE_ID);
   tft.fillScreen(TFT_BLACK);
@@ -244,16 +302,16 @@ void sendSensorTelemetry(uint8_t destId) {
   tft.printf("Concentrador (%d)", destId);
   
   tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-  
   tft.setCursor(0, 42);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.print("Estado: Transmitiendo...");
-  
   tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+  
   tft.setCursor(0, 66);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft.printf("Delay: %d ms", DELAY_TX);
   
+  // Transmitir paquete por LoRa
   int state = radio.transmit((uint8_t*)&packet, packetSize);
   
   tft.fillRect(0, 42, 160, 10, TFT_BLACK);
@@ -268,20 +326,32 @@ void sendSensorTelemetry(uint8_t destId) {
     tft.printf("Estado: TX ERR %d", state);
     sprintf(lastRfActivity, "TX Telem ERR %d", state);
   }
+  
+  // Regresar inmediatamente al modo de escucha
   radio.startReceive();
-  delay(1500); // Mostrar resultado
+  delay(1500); // Dar margen para visualizar la información en pantalla
   drawDashboard();
 }
 
+/**
+ * @brief Solicita un fragmento de bytes específico a la cámara UART con reintentos robustos.
+ * @param offset Desplazamiento en bytes de la imagen a solicitar.
+ * @param len Longitud del fragmento de imagen a leer.
+ * @param dest Búfer de destino en memoria RAM para guardar el fragmento recibido.
+ * @return true si la lectura fue completa y exitosa, false en caso contrario.
+ * 
+ * Implementa 3 intentos robustos de lectura con vaciado de ruido residual del canal serie.
+ */
 bool getChunkFromCam(uint32_t offset, uint32_t len, uint8_t* dest) {
   for (int retry = 0; retry < 3; retry++) {
-      while(camSerial.available()) camSerial.read(); // Limpiar residuales
+      while(camSerial.available()) camSerial.read(); // Limpiar ruidos o bytes colgados en el búfer RX
       
+      // Enviar comando estructurado a la cámara
       camSerial.printf("GET_CHUNK %u %u\n", offset, len);
       
       unsigned long start = millis();
       uint32_t readBytes = 0;
-      camSerial.setTimeout(500);
+      camSerial.setTimeout(500); // Límite de lectura UART
       
       while (readBytes < len && millis() - start < 800) {
           size_t readNow = camSerial.readBytes(dest + readBytes, len - readBytes);
@@ -293,16 +363,28 @@ bool getChunkFromCam(uint32_t offset, uint32_t len, uint8_t* dest) {
       }
       
       if (readBytes == len) {
-          return true; // ¡Éxito!
+          return true; // Éxito en la lectura secuencial
       }
       Serial.printf("Intento %d: getChunkFromCam falló (leído %u de %u)\n", retry + 1, readBytes, len);
-      delay(50); // Breve espera antes del reintento
+      delay(50); // Pausa estretégica antes de reintentar
   }
-  return false; // Falló tras 3 intentos
+  return false; // Falló de comunicación con la cámara
 }
 
+/**
+ * @brief Captura y transmite secuencialmente una imagen por bloques LoRa de ancho máximo (LORA_MAX_PAYLOAD).
+ * @param destId Identificador único del nodo de destino (Concentrador).
+ * 
+ * Flujo Completo:
+ *  1. Envía un paquete ACK para indicar la recepción del comando y encender la cámara.
+ *  2. Habilita y enciende la cámara, toma la foto (`TAKE_PIC`) y lee el tamaño total de la imagen.
+ *  3. Transmite el paquete inicial `DATA_IMG_START` con los metadatos de la imagen.
+ *  4. Envía cada fragmento `DATA_IMG_CHUNK` con un pacing dinámico controlado (`DELAY_TX`).
+ *  5. Envía `DATA_IMG_END` e inicia la máquina de retransmisión selectiva (NACK / `CMD_REQ_MISSING`).
+ *  6. Vuelve a transmitir fragmentos faltantes solicitados hasta completar la confirmación final (`ACK`).
+ */
 void requestAndSendImage(uint8_t destId) {
-  // Enviar ACK primero para avisar que recibimos el comando y estamos tomando la foto
+  // Enviar ACK inicial de gracia
   LoRaPacket ackPacket;
   ackPacket.header.syncWord[0] = LORA_SYNC_0;
   ackPacket.header.syncWord[1] = LORA_SYNC_1;
@@ -315,6 +397,7 @@ void requestAndSendImage(uint8_t destId) {
   radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
   delay(100);
 
+  // Inicializar interfaz gráfica de captura
   char headerTitle[30];
   sprintf(headerTitle, "NODO %d - CAMARA", MY_NODE_ID);
   tft.fillScreen(TFT_BLACK);
@@ -327,26 +410,29 @@ void requestAndSendImage(uint8_t destId) {
   tft.printf("Concentrador (%d)", destId);
   
   tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-  
   tft.setCursor(0, 42);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.print("Estado: Capturando foto...");
-  
   tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+  
   tft.setCursor(0, 66);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft.print("Espere 2 segundos...");
   
+  // Encender la cámara ESP32-CAM físicamente liberando energía
   digitalWrite(CAM_EN, HIGH);
-  delay(2000);
+  delay(2000); // Tiempo de arranque necesario para inicialización de CMOS de cámara
   
-  while(camSerial.available()) camSerial.read();
+  while(camSerial.available()) camSerial.read(); // Limpiar remanentes serie
   
+  // Solicitar disparo de foto
   camSerial.println("TAKE_PIC");
   
   unsigned long waitStart = millis();
   bool imgIncoming = false;
   uint32_t imgSize = 0;
+  
+  // Leer tamaño de imagen entrante (4 bytes raw)
   while(millis() - waitStart < 5000) {
     if(camSerial.available() >= 4) {
       camSerial.readBytes((uint8_t*)&imgSize, 4);
@@ -355,12 +441,13 @@ void requestAndSendImage(uint8_t destId) {
     }
   }
 
+  // Comprobación de límites lógicos
   if (!imgIncoming || imgSize <= 0 || imgSize > 500000) {
     tft.fillRect(0, 42, 160, 10, TFT_BLACK);
     tft.setCursor(0, 42);
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.print("Estado: Err Camara/Tamano");
-    digitalWrite(CAM_EN, LOW);
+    digitalWrite(CAM_EN, LOW); // Apagar cámara ante error
     radio.startReceive();
     delay(1500);
     drawDashboard();
@@ -369,6 +456,7 @@ void requestAndSendImage(uint8_t destId) {
 
   uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
 
+  // Inicializar interfaz de streaming
   sprintf(headerTitle, "NODO %d - ENVIAR FOTO", MY_NODE_ID);
   tft.fillScreen(TFT_BLACK);
   drawHeader(headerTitle);
@@ -388,21 +476,20 @@ void requestAndSendImage(uint8_t destId) {
   tft.printf("%.1f KB", imgSize / 1024.0);
   
   tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-  
   tft.setCursor(0, 42);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.print("Estado: Enviando chunks...");
-  
   tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
 
   uint16_t totalChunks = (imgSize + LORA_MAX_PAYLOAD - 1) / LORA_MAX_PAYLOAD;
 
+  // Construir y enviar paquete inicial START
   LoRaPacket packet;
   packet.header.syncWord[0] = LORA_SYNC_0;
   packet.header.syncWord[1] = LORA_SYNC_1;
   packet.header.srcId = MY_NODE_ID;
   packet.header.destId = destId;
-  packet.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+  packet.header.nextHopId = nextHop;
   packet.header.type = DATA_IMG_START;
   packet.header.seqNum = 0;
   packet.header.ttl = 5;
@@ -412,21 +499,17 @@ void requestAndSendImage(uint8_t destId) {
   memcpy(packet.payload + 4, &totalChunks, 2);
   
   radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
-
-  delay(1000);
+  delay(1000); // Tiempo de guarda para inicializar archivo en SD del concentrador
 
   packet.header.type = DATA_IMG_CHUNK;
   uint16_t chunkIndex = 1;
   uint32_t bytesSent = 0;
 
-  tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-  tft.setCursor(0, 65);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
+  // Transmisión en bucle de los fragmentos
   while(bytesSent < imgSize) {
       uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - bytesSent);
       
-      // Obtener el fragmento de la cámara dinámicamente en lugar de leer del heap
+      // Obtener el fragmento de la cámara dinámicamente en lugar de almacenar toda la imagen en el Heap (RAM)
       if (getChunkFromCam(bytesSent, chunkLen, packet.payload)) {
           packet.header.seqNum = chunkIndex;
           radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
@@ -437,6 +520,7 @@ void requestAndSendImage(uint8_t destId) {
           tft.setTextColor(TFT_WHITE, TFT_BLACK);
           tft.printf("%u / %u Chunks", (uint32_t)(chunkIndex - 1), totalChunks);
           
+          // Aplicación estricta de pacing para prevención de colisiones por desbordamiento de búfer repetidor
           delay(DELAY_TX); 
       } else {
           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
@@ -444,23 +528,24 @@ void requestAndSendImage(uint8_t destId) {
           tft.setTextColor(TFT_RED, TFT_BLACK);
           tft.printf("Estado: Err Cam %u", chunkIndex);
           Serial.printf("Error UART: Omitiendo chunk %u tras fallar todos los reintentos UART\n", chunkIndex);
-          // Omitimos este chunk incrementando bytesSent para mantener la consistencia del offset.
-          // El concentrador lo detectará como perdido porque faltará esta secuencia y lo pedirá en la fase de NACK.
+          
+          // Incrementamos de todos modos el offset para asegurar alineación de secuencias y evitar bucles
+          // infinitos. El Concentrador lo pedirá explícitamente en la fase NACK.
           bytesSent += chunkLen;
           delay(100);
       }
-      chunkIndex++; // Mantener la consistencia del índice de secuencia
+      chunkIndex++; 
   }
 
   delay(500); 
   
+  // Transmitir END para cerrar el lote
   packet.header.type = DATA_IMG_END;
   packet.header.seqNum = chunkIndex;
   memcpy(packet.payload, &imgSize, 4);
   memcpy(packet.payload + 4, &totalChunks, 2);
   radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
 
-  // Entrar en bucle de recuperación de fragmentos perdidos
   tft.fillRect(0, 42, 160, 10, TFT_BLACK);
   tft.setCursor(0, 42);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -469,11 +554,13 @@ void requestAndSendImage(uint8_t destId) {
   unsigned long sessionStart = millis();
   unsigned long lastEndTxTime = millis();
   radio.startReceive();
+  
   bool waitingResponse = true;
   uint8_t endRetryCount = 0;
 
-  while (waitingResponse && millis() - sessionStart < 120000) { // Timeout de seguridad de 120s
-      // Retransmisión periódica de DATA_IMG_END si pasan 4 segundos sin recibir confirmación/petición
+  // --- Bucle de Recuperación NACK Selectiva (ARQ) ---
+  while (waitingResponse && millis() - sessionStart < 120000) { // Timeout de resguardo de 2 minutos
+      // Re-enviar END si pasan 4 segundos sin respuesta del receptor
       if (millis() - lastEndTxTime > 4000) {
           if (endRetryCount < 5) {
               endRetryCount++;
@@ -493,56 +580,58 @@ void requestAndSendImage(uint8_t destId) {
           }
       }
 
+      // Procesar eventos LoRa recibidos
       if (digitalRead(LORA_DIO1)) {
           LoRaPacket rxPacket;
           int state = radio.readData((uint8_t*)&rxPacket, sizeof(rxPacket));
           if (state == RADIOLIB_ERR_NONE) {
               if (rxPacket.header.syncWord[0] == LORA_SYNC_0 && rxPacket.header.syncWord[1] == LORA_SYNC_1) {
-                  // Validar que el salto físico sea estrictamente para mí antes de procesar
+                  
+                  // Validación física crítica del salto: solo procesar si va dirigido a mi ID
                   if (rxPacket.header.nextHopId != MY_NODE_ID) {
                       radio.startReceive();
                       continue;
                   }
+                  
                   if (rxPacket.header.destId == MY_NODE_ID) {
                       if (rxPacket.header.type == ACK) {
-                          // Concentrador recibió todo sin pérdidas
+                          // ¡Concentrador recibió todo sin pérdidas!
                           Serial.println("LoRa Flow: ¡Concentrador reporta 100% recibido! Sesión completada.");
-                           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                           tft.setCursor(0, 42);
-                           tft.setTextColor(TFT_GREEN, TFT_BLACK);
-                           tft.print("Estado: CONFIRMADO [OK]");
-                           strcpy(lastRfActivity, "TX Img OK");
+                          tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                          tft.setCursor(0, 42);
+                          tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                          tft.print("Estado: CONFIRMADO [OK]");
+                          strcpy(lastRfActivity, "TX Img OK");
                           waitingResponse = false;
                       }
                       else if (rxPacket.header.type == CMD_REQ_MISSING) {
-                          // Hay fragmentos perdidos. Retransmitirlos
+                          // Procesar lista selectiva de fragmentos faltantes
                           uint16_t missingCount = 0;
                           memcpy(&missingCount, rxPacket.payload, 2);
                           uint16_t* sequences = (uint16_t*)(rxPacket.payload + 2);
                           
                           Serial.printf("LoRa Flow: ¡NACK recibido! %u fragmentos perdidos. Retransmitiendo...\n", missingCount);
-                           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                           tft.setCursor(0, 42);
-                           tft.setTextColor(TFT_RED, TFT_BLACK);
-                           tft.printf("Estado: NACK %u reen...", missingCount);
+                          tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                          tft.setCursor(0, 42);
+                          tft.setTextColor(TFT_RED, TFT_BLACK);
+                          tft.printf("Estado: NACK %u reen...", missingCount);
 
                           packet.header.type = DATA_IMG_CHUNK;
                           
+                          // Retransmitir cada bloque pedido
                           for (uint16_t i = 0; i < missingCount; i++) {
                               uint16_t seq = sequences[i];
                               if (seq <= totalChunks) {
                                   uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
                                   uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - offset);
                                   
-                                  // Solicitar fragmento dinámicamente sobre UART de la cámara
+                                  // Solicitar dinámicamente sobre el canal serie de la cámara
                                   if (getChunkFromCam(offset, chunkLen, packet.payload)) {
                                       packet.header.seqNum = seq;
                                       radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
                                       Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u)\n", seq, offset, chunkLen);
-                                  } else {
-                                      Serial.printf("Fallo al re-solicitar chunk %d a la cámara por UART!\n", seq);
                                   }
-                                  delay(DELAY_TX);
+                                  delay(DELAY_TX); // Respetar pacing de retransmisión
                               }
                           }
                           
@@ -554,7 +643,7 @@ void requestAndSendImage(uint8_t destId) {
                           memcpy(packet.payload + 4, &totalChunks, 2);
                           radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + 6);
                           
-                          // Reiniciar temporizadores tras transmisión exitosa de fragmentos
+                          // Reiniciar temporizadores
                           sessionStart = millis();
                           lastEndTxTime = millis();
                           endRetryCount = 0;
@@ -568,23 +657,29 @@ void requestAndSendImage(uint8_t destId) {
       delay(10);
   }
 
-  // Notificar fin de sesión a la cámara para liberar memoria PSRAM
+  // Liberar recursos de hardware y apagar la cámara
   camSerial.println("RELEASE_PIC");
   digitalWrite(CAM_EN, LOW);
   radio.startReceive();
-  delay(1000); // Mostrar resultado
+  delay(1000);
   drawDashboard();
 }
 
+/**
+ * @brief Filtra y registra en caché los paquetes ya enrutados en la red lineal.
+ * @param srcId Nodo de origen.
+ * @param type Tipo de paquete.
+ * @param seqNum Número de secuencia.
+ * @return true si ya fue visto con anterioridad (duplicado), false si es nuevo.
+ */
 bool checkSeenAndAdd(uint8_t srcId, uint8_t type, uint16_t seqNum) {
     for (int i = 0; i < seenCount; i++) {
         if (seenBuffer[i].srcId == srcId &&
             seenBuffer[i].type == type &&
             seenBuffer[i].seqNum == seqNum) {
-            return true; // Ya lo vimos
+            return true; 
         }
     }
-    // No lo hemos visto, lo agregamos
     if (seenCount < 10) {
         seenBuffer[seenCount++] = {srcId, type, seqNum};
     } else {
@@ -594,6 +689,9 @@ bool checkSeenAndAdd(uint8_t srcId, uint8_t type, uint16_t seqNum) {
     return false;
 }
 
+/**
+ * @brief Gestiona la escucha, decodificación y retransmisión (routing) del protocolo LoRa.
+ */
 void handleLoRa() {
   if (digitalRead(LORA_DIO1)) {
     LoRaPacket rxPacket;
@@ -608,11 +706,12 @@ void handleLoRa() {
                       rxPacket.header.srcId, rxPacket.header.destId, rxPacket.header.nextHopId,
                       rxPacket.header.type, rxPacket.header.ttl);
         
-        // TTL Check
+        // Comprobar tiempo de vida del paquete
         if (rxPacket.header.ttl > 0) {
             rxPacket.header.ttl--;
             
-            // ¿Es físicamente para mí en este salto?
+            // --- FILTRO CRÍTICO DE HOP FÍSICO ---
+            // Solo procesar si el paquete indica explícitamente que soy el siguiente salto receptor.
             if (rxPacket.header.nextHopId != MY_NODE_ID) {
                 Serial.printf("[DEBUG LoRa] Salto Fisico Ignorado: nextHopId (%d) != MY_NODE_ID (%d)\n",
                               rxPacket.header.nextHopId, MY_NODE_ID);
@@ -620,7 +719,7 @@ void handleLoRa() {
                 return;
             }
             
-            // ¿Es para mí?
+            // ¿El paquete está dirigido formalmente a mi ID final?
             if (rxPacket.header.destId == MY_NODE_ID) {
                 Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n", rxPacket.header.type, rxPacket.header.srcId);
                 
@@ -634,7 +733,6 @@ void handleLoRa() {
                 tft.setCursor(0, 18);
                 tft.setTextColor(TFT_WHITE, TFT_BLACK);
                 tft.print("Ruta: ");
-                tft.setTextColor(TFT_WHITE, TFT_BLACK);
                 tft.printf("[N%d] -> ", prevHop);
                 tft.setTextColor(TFT_GREEN, TFT_BLACK);
                 tft.printf("[*N%d*]", MY_NODE_ID);
@@ -646,36 +744,37 @@ void handleLoRa() {
                 tft.printf("Nodo %d", rxPacket.header.srcId);
                 
                 tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-                
                 tft.setCursor(0, 42);
                 tft.setTextColor(TFT_YELLOW, TFT_BLACK);
                 tft.printf("Comando: 0x%02X", rxPacket.header.type);
-                
                 tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+                
                 tft.setCursor(0, 66);
                 tft.setTextColor(TFT_GREEN, TFT_BLACK);
                 tft.print("Procesando comando...");
                 
                 sprintf(lastRfActivity, "RX Cmd 0x%02X de %d", rxPacket.header.type, rxPacket.header.srcId);
                 
+                // Ejecutar la acción solicitada
                 if (rxPacket.header.type == CMD_REQ_TELEMETRY) {
-                    delay(80); // Retardo mínimo para batería (gracia de RF)
+                    delay(80); // Margen mínimo de estabilización
                     sendSensorTelemetry(rxPacket.header.srcId);
                 } 
                 else if (rxPacket.header.type == CMD_REQ_IMAGE) {
-                    delay(80); // Retardo mínimo para batería (gracia de RF)
+                    delay(80); 
                     requestAndSendImage(rxPacket.header.srcId);
                 }
             } 
-            // ¿Debo retransmitir (Enrutamiento Lineal)?
+            // --- ENRUTAMIENTO DE RED LINEAL ---
+            // Si el destino no soy yo y aún tiene saltos de vida, propagarlo
             else if (rxPacket.header.ttl > 0) {
                 bool shouldRelay = false;
                 
-                // Downstream: Origen < Mi ID, y Destino > Mi ID
+                // Flujo Bajada: Concentrador hacia sensores remotos (ID Origen < Mi ID, ID Destino > Mi ID)
                 if (rxPacket.header.srcId < MY_NODE_ID && rxPacket.header.destId > MY_NODE_ID) {
                     shouldRelay = true;
                 }
-                // Upstream: Origen > Mi ID, y Destino < Mi ID
+                // Flujo Subida: Sensores remotos hacia concentrador (ID Origen > Mi ID, ID Destino < Mi ID)
                 else if (rxPacket.header.srcId > MY_NODE_ID && rxPacket.header.destId < MY_NODE_ID) {
                     shouldRelay = true;
                 }
@@ -687,6 +786,7 @@ void handleLoRa() {
                     uint8_t prevHop = isUpstream ? (MY_NODE_ID + 1) : (MY_NODE_ID - 1);
                     uint8_t nextHop = isUpstream ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
                     
+                    // Solo renderizar el cambio de pantalla si no es una ráfaga de chunks rápidos (evita latencias críticas)
                     if (rxPacket.header.type != DATA_IMG_CHUNK) {
                         char headerTitle[30];
                         sprintf(headerTitle, "NODO %d - REPETIDOR", MY_NODE_ID);
@@ -696,7 +796,6 @@ void handleLoRa() {
                         tft.setCursor(0, 18);
                         tft.setTextColor(TFT_WHITE, TFT_BLACK);
                         tft.print("Ruta: ");
-                        tft.setTextColor(TFT_WHITE, TFT_BLACK);
                         tft.printf("[N%d] -> ", prevHop);
                         tft.setTextColor(TFT_GREEN, TFT_BLACK);
                         tft.printf("[*N%d*]", MY_NODE_ID);
@@ -710,21 +809,24 @@ void handleLoRa() {
                         tft.printf("%d -> Dest: %d", rxPacket.header.srcId, rxPacket.header.destId);
                         
                         tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-                        
                         tft.setCursor(0, 42);
                         tft.setTextColor(TFT_YELLOW, TFT_BLACK);
                         tft.print("Retransmitiendo...");
-                        
                         tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+                        
                         tft.setCursor(0, 66);
                         tft.setTextColor(TFT_GREEN, TFT_BLACK);
                         tft.print("Relay LoRa OK");
                     }
                     
+                    // Modificar la cabecera con el ID del salto físico receptor directo
                     rxPacket.header.nextHopId = nextHop;
-                    delay(40); // Retardo mínimo para batería (40ms backoff)
+                    
+                    // Backoff defensivo para des-sincronizar colisiones en el aire
+                    delay(40); 
+                    
                     radio.transmit((uint8_t*)&rxPacket, packetLen);
-                    radio.startReceive();
+                    radio.startReceive(); // Regresar inmediatamente a modo escucha
                     Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId, rxPacket.header.destId);
                     
                     sprintf(lastRfActivity, "Relay %d->%d OK", rxPacket.header.srcId, rxPacket.header.destId);
@@ -742,12 +844,18 @@ void handleLoRa() {
   }
 }
 
+/**
+ * @brief Loop de ejecución infinita del programa.
+ */
 void loop() {
   static unsigned long lastHeartbeat = 0;
+  
+  // Latido periódico (Heartbeat) de diagnóstico local cada 5 segundos
   if (millis() - lastHeartbeat > 5000) {
     Serial.printf("[HEARTBEAT] Nodo %d ejecutando loop...\n", MY_NODE_ID);
     lastHeartbeat = millis();
   }
-  smartDelay(10);
-  handleLoRa();
+  
+  smartDelay(10); // Alimentar decodificador GPS
+  handleLoRa();   // Procesar actividades de red
 }
