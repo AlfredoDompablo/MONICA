@@ -178,6 +178,15 @@ static void smartDelay(unsigned long ms) {
   } while (millis() - start < ms);
 }
 
+void drawHeader(const char* title) {
+    tft.fillRect(0, 0, 160, 15, tft.color565(0, 51, 102)); // Navy Blue bar
+    tft.drawFastHLine(0, 15, 160, tft.color565(200, 200, 200)); // Silver line
+    tft.setTextColor(TFT_WHITE, tft.color565(0, 51, 102));
+    tft.setTextSize(1);
+    tft.setCursor((160 - strlen(title) * 6) / 2, 4); // Centrado
+    tft.print(title);
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -254,13 +263,10 @@ void setup() {
   
   // Dibujar el Dashboard Permanente (Mitad Superior)
   tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.println("=== MONICA CONCENTRADOR ===");
+  drawHeader("MONICA CONCENTRADOR");
   
-  // Estado de Hardware (Fila 1)
-  tft.setCursor(0, 10);
+  // Estado de Hardware (Fila 1 en y = 18)
+  tft.setCursor(0, 18);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.print("SD: ");
   if (sdMounted) {
@@ -274,18 +280,19 @@ void setup() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.print("  |  WiFi: ");
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.println("OK");
+  tft.print("OK");
   
-  // IP (Fila 2)
-  tft.setCursor(0, 20);
+  // IP (Fila 2 en y = 28)
+  tft.setCursor(0, 28);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.print("IP: ");
-  tft.println(WiFi.localIP());
+  tft.print(WiFi.localIP());
   
-  // Separador (Fila 3)
-  tft.setCursor(0, 30);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.println("---------------------------");
+  // Separador (en y = 39)
+  tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
+  
+  // Separador inferior del Footer (en y = 63)
+  tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
 
   // Iniciar la escucha LoRa en segundo plano
   radio.startReceive();
@@ -317,20 +324,22 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-api-key", API_KEY);
   
-  tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-  tft.setCursor(0, 60);
+  tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+  tft.setCursor(0, 53);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.println("Subiendo HTTP...");
+  tft.print("Subiendo HTTP...");
   
   int httpResponseCode = http.POST(jsonOutput);
+  tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+  tft.setCursor(0, 53);
   if (httpResponseCode == 200 || httpResponseCode == 201) {
     Serial.println(String("Sensor Reenviado OK: ") + httpResponseCode);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.println("POST OK!");
+    tft.print("HTTP: POST OK!");
   } else {
     Serial.println(String("Error reenviando sensor: ") + httpResponseCode);
     tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.println("POST ERR!");
+    tft.printf("HTTP: ERR %d", httpResponseCode);
   }
   http.end();
 }
@@ -338,8 +347,8 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
 void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
     String filename = String("/img_node_") + packet->header.srcId + ".jpg";
     
-    tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-    tft.setCursor(0, 60);
+    tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+    tft.setCursor(0, 53);
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     
     if (packet->header.type == DATA_IMG_START) {
@@ -392,7 +401,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         } else {
             Serial.println("Error: Falló al inicializar y abrir el archivo en la SD para streaming");
         }
-        tft.println("Recibiendo Foto...");
+        tft.print("Recibiendo Foto...");
     } 
     else if (packet->header.type == DATA_IMG_CHUNK) {
         uint16_t seq = packet->header.seqNum;
@@ -446,10 +455,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             Serial.println("Error: Archivo inactivo en volcado de chunk");
         }
         
-        tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-        tft.setCursor(0, 60);
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.printf("Recibiendo: %u", (uint32_t)seq);
+        tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+        tft.setCursor(0, 65);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.printf("%u / %u Chunks", (uint32_t)seq, totalChunks);
     }
     else if (packet->header.type == DATA_IMG_END) {
         lastChunkReceivedTime = millis();
@@ -510,10 +519,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         if (missingCount > 0) {
             Serial.printf("LoRa Integrity: ¡Perdidos %u chunks! Enviando petición de retransmisión CMD_REQ_MISSING...\n", missingCount);
             
-            tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-            tft.setCursor(0, 60);
+            tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+            tft.setCursor(0, 53);
             tft.setTextColor(TFT_RED, TFT_BLACK);
-            tft.printf("Perdidos: %u Chunks", missingCount);
+            tft.printf("NACK: %u Chunks", missingCount);
             
             LoRaPacket nackPacket;
             memset(&nackPacket, 0, sizeof(LoRaHeader));
@@ -538,10 +547,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         // Si no hay fragmentos perdidos: ¡Éxito absoluto de reensamblado!
         Serial.println("LoRa Integrity: ¡100% de fragmentos recibidos con éxito! Enviando ACK final...");
         
-        tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-        tft.setCursor(0, 60);
+        tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+        tft.setCursor(0, 53);
         tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.println("Reensamblado OK!");
+        tft.print("Reensamblado OK!");
 
         // Enviar ACK final al nodo para que libere su buffer
         LoRaPacket ackPacket;
@@ -678,10 +687,10 @@ void handleLoRa() {
                     size_t payloadLen = packetLen - sizeof(LoRaHeader);
 
                     if (packet.header.type == DATA_TELEMETRY) {
-                        tft.fillRect(0, 40, 160, 15, TFT_BLACK);
-                        tft.setCursor(0, 40);
+                        tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                        tft.setCursor(0, 42);
                         tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                        tft.printf("RX: SENSOR (%d)\n", packet.header.srcId);
+                        tft.printf("RX: SENSOR (%d)", packet.header.srcId);
                         
                         SensorPayload* sp = (SensorPayload*)packet.payload;
                         forwardSensorData(packet.header.srcId, sp);
@@ -692,10 +701,10 @@ void handleLoRa() {
                     }
                     else if (packet.header.type >= DATA_IMG_START && packet.header.type <= DATA_IMG_END) {
                         if(packet.header.type == DATA_IMG_START) {
-                           tft.fillRect(0, 40, 160, 15, TFT_BLACK);
-                           tft.setCursor(0, 40);
+                           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                           tft.setCursor(0, 42);
                            tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
-                           tft.printf("RX: IMG (%d)\n", packet.header.srcId);
+                           tft.printf("RX: IMG (%d)", packet.header.srcId);
                            
                            if (packet.header.srcId == targetNode && pollForImage) {
                                responseReceived = true;
@@ -704,10 +713,10 @@ void handleLoRa() {
                         handleImageFragment(&packet, payloadLen);
                     }
                     else if (packet.header.type == ACK) {
-                        tft.fillRect(0, 40, 160, 15, TFT_BLACK);
-                        tft.setCursor(0, 40);
+                        tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                        tft.setCursor(0, 42);
                         tft.setTextColor(TFT_GREEN, TFT_BLACK);
-                        tft.printf("ACK Nodo %d\n", packet.header.srcId);
+                        tft.printf("ACK Nodo %d", packet.header.srcId);
                         
                         if (packet.header.srcId == targetNode && pollForImage) {
                             responseReceived = true;
@@ -742,10 +751,10 @@ void loop() {
           chunkReceived = NULL;
       }
       lastPollTime = millis(); // Resetear polling tras timeout para evitar ráfagas inmediatas
-      tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-      tft.setCursor(0, 60);
+      tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+      tft.setCursor(0, 53);
       tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.println("Img Timeout!");
+      tft.print("Img Timeout!");
   }
   
   // Lógica de Polling Automático Altamente Confiable con 3 Intentos de Retransmisión
@@ -784,10 +793,10 @@ void loop() {
                   currentAttempt++;
                   Serial.printf("LoRa Flow: Timeout! Re-intentando peticion al Nodo %d (Intento %d/3)...\n", targetNode, currentAttempt);
                   
-                  tft.fillRect(0, 80, 160, 20, TFT_BLACK);
-                  tft.setCursor(0, 80);
+                  tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+                  tft.setCursor(0, 65);
                   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                  tft.printf("Reintentando %d... %d/3", targetNode, currentAttempt);
+                  tft.printf("Reint %d... %d/3", targetNode, currentAttempt);
                   
                   PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
                   pollNode(targetNode, cmd);
@@ -796,10 +805,10 @@ void loop() {
               } else {
                   Serial.printf("LoRa Flow: [FALLO] Sin respuesta del Nodo %d tras 3 intentos. Pasando al siguiente.\n", targetNode);
                   
-                  tft.fillRect(0, 80, 160, 20, TFT_BLACK);
-                  tft.setCursor(0, 80);
+                  tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+                  tft.setCursor(0, 65);
                   tft.setTextColor(TFT_RED, TFT_BLACK);
-                  tft.printf("Fallo Nodo %d (3 reintentos)", targetNode);
+                  tft.printf("Err Nodo %d (3 int)", targetNode);
                   
                   // Rotar de todas formas para no quedar bloqueados
                   if (pollForImage) {
