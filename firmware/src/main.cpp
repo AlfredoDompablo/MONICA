@@ -96,6 +96,10 @@ static void smartDelay(unsigned long ms) {
 char lastRfActivity[30] = "Ninguna";  // Cadena formateada para desplegar la última actividad RF en el dashboard.
 uint8_t simulatedBattery = 95;       // Nivel de porcentaje simulado de carga de la batería del dispositivo.
 
+// --- Variables de Control No-Bloqueante para Pantalla de Repetidor ---
+unsigned long lastRelayScreenTime = 0; // Registra cuándo se mostró la pantalla de retransmisión.
+bool isRelayScreenActive = false;      // Bandera para indicar que la pantalla de retransmisión está visible.
+
 /**
  * @brief Dibuja la barra de título premium del dashboard.
  * @param title Cadena de texto a mostrar en el centro de la barra superior.
@@ -832,8 +836,10 @@ void handleLoRa() {
                     sprintf(lastRfActivity, "Relay %d->%d OK", rxPacket.header.srcId, rxPacket.header.destId);
                     
                     if (rxPacket.header.type != DATA_IMG_CHUNK) {
-                        delay(1200); // Mostrar resultado
-                        drawDashboard();
+                        // Configurar el temporizador no-bloqueante en lugar de usar un delay() que congele el receptor.
+                        // Esto permite que el nodo enrute instantáneamente la respuesta de vuelta sin perder paquetes.
+                        lastRelayScreenTime = millis();
+                        isRelayScreenActive = true;
                     }
                 }
             }
@@ -854,6 +860,12 @@ void loop() {
   if (millis() - lastHeartbeat > 5000) {
     Serial.printf("[HEARTBEAT] Nodo %d ejecutando loop...\n", MY_NODE_ID);
     lastHeartbeat = millis();
+  }
+  
+  // Retornar al dashboard en espera de forma no-bloqueante tras 2 segundos en pantalla de repetidor
+  if (isRelayScreenActive && (millis() - lastRelayScreenTime > 2000)) {
+    isRelayScreenActive = false;
+    drawDashboard();
   }
   
   smartDelay(10); // Alimentar decodificador GPS
