@@ -44,8 +44,8 @@ HardwareSerial heltecSerial(1); // Canal de hardware UART1 dedicado para evitar 
 sensor_t * s = NULL;            // Puntero del controlador del sensor físico OV2640.
 camera_fb_t * currentFb = NULL;   // Puntero del Frame Buffer retenido temporalmente en RAM.
 
-// Resolución de captura JPEG inicial por defecto (8 = FRAMESIZE_VGA)
-int currentFrameSize = 8; 
+// Resolución de captura JPEG inicial por defecto (21 = FRAMESIZE_QSXGA)
+int currentFrameSize = 21; 
 
 /**
  * @brief Obtiene el nombre legible de la resolución según su índice entero de configuración.
@@ -113,7 +113,7 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 12000000;
+  config.xclk_freq_hz = 8000000;  // Reducido a 8MHz para bajar picos de corriente en QSXGA
   config.pixel_format = PIXFORMAT_JPEG;
   
   // Determinar la locación de búfer física de manera dinámica según la presencia de memoria PSRAM
@@ -121,7 +121,7 @@ void setup() {
     Serial.println("PSRAM DETECTED");
     config.frame_size = FRAMESIZE_QSXGA; // Permite escalamientos dinámicos posteriores
     config.jpeg_quality = 14;            // Alta fidelidad JPG
-    config.fb_count = 2;                 // Búfer doble para evitar frames corruptos
+    config.fb_count = 1;                 // Búfer único para ahorrar memoria PSRAM en resoluciones ultra altas (QSXGA)
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
@@ -141,7 +141,10 @@ void setup() {
 
   s = esp_camera_sensor_get();
   
-  // Aplicar resolución inicial por defecto (VGA)
+  // Aplicar resolución inicial por defecto (VGA o QSXGA si hay PSRAM)
+  if (!psramFound() && currentFrameSize > 8) {
+    currentFrameSize = 8; // Forzar VGA si no hay PSRAM
+  }
   s->set_framesize(s, (framesize_t)currentFrameSize);
 
   // Parámetros base estables de captura

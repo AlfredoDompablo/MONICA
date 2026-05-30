@@ -835,6 +835,65 @@ void handleLoRa() {
         radio.startReceive(); 
     }
 }
+/**
+ * @brief Escucha y procesa comandos manuales ingresados por el puerto serie USB.
+ * 
+ * Permite al usuario forzar el muestreo de un nodo y tipo de dato específico desde su PC.
+ * Formato del comando esperado: "POLL <nodo> <tipo>"
+ *   - <nodo>: ID de nodo (1 al 4).
+ *   - <tipo>: 'T' para telemetría, 'I' para disparar cámara y obtener imagen.
+ *   Ejemplo: "POLL 2 T" o "POLL 4 I"
+ */
+void handleSerial() {
+  if (Serial.available()) {
+    String cmdStr = Serial.readStringUntil('\n');
+    cmdStr.trim();
+    
+    if (cmdStr.startsWith("POLL")) {
+      if (expectedSeqNum > 0) {
+        Serial.println("[ERROR MANUAL] Recepción de imagen en progreso. Comando omitido.");
+        return;
+      }
+      if (pollState != POLL_STATE_IDLE) {
+        Serial.println("[ERROR MANUAL] Concentrador ocupado esperando respuesta de red. Comando omitido.");
+        return;
+      }
+      
+      int firstSpace = cmdStr.indexOf(' ');
+      int secondSpace = cmdStr.indexOf(' ', firstSpace + 1);
+      if (firstSpace != -1 && secondSpace != -1) {
+        int node = cmdStr.substring(firstSpace + 1, secondSpace).toInt();
+        String typeChar = cmdStr.substring(secondSpace + 1);
+        typeChar.trim();
+        
+        if (node >= 1 && node <= 4) {
+          bool isImg = (typeChar.equalsIgnoreCase("I"));
+          bool isTelem = (typeChar.equalsIgnoreCase("T"));
+          
+          if (isImg || isTelem) {
+            targetNode = node;
+            pollForImage = isImg;
+            responseReceived = false;
+            currentAttempt = 1;
+            requestSentTime = millis();
+            currentTimeout = pollForImage ? 6000 : 3500;
+            pollState = POLL_STATE_WAITING_RESPONSE;
+            
+            PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
+            Serial.printf("[MANUAL] Iniciando sondeo forzado: Nodo %d, Tipo %s\n", targetNode, pollForImage ? "IMAGEN" : "TELEMETRIA");
+            pollNode(targetNode, cmd);
+          } else {
+            Serial.println("[ERROR MANUAL] Tipo de dato inválido. Use 'T' para telemetría o 'I' para imagen.");
+          }
+        } else {
+          Serial.println("[ERROR MANUAL] ID de nodo inválido. Rango permitido: 1 a 4.");
+        }
+      } else {
+        Serial.println("[ERROR MANUAL] Formato de comando incorrecto. Use: POLL <nodo> <tipo> (Ej: POLL 2 T)");
+      }
+    }
+  }
+}
 
 /**
  * @brief Loop de ejecución principal y control de máquinas de estado del Concentrador.
@@ -850,6 +909,7 @@ void loop() {
   
   smartDelay(10); 
   handleLoRa();
+  handleSerial();
   
   // --- CONTROL DE SEGURIDAD (TIMEOUT) PARA SESIÓN DE IMAGEN ---
   // Si la transmisión de una foto queda colgada por más de 60 segundos (p. ej., porque se apagó
@@ -876,8 +936,9 @@ void loop() {
   // --- MÁQUINA DE ESTADOS DE POLLING DE BAJO TIEMPO DE RESPUESTA CON 3 INTENTOS ---
   // Solo iniciar un nuevo muestreo si no nos encontramos en medio de una recepción activa de imagen
   if (expectedSeqNum == 0) {
-      // Estado de espera completado: iniciar un nuevo muestreo
+      // Estado de espera completado: iniciar un nuevo muestreo (DESACTIVADO: ahora es 100% manual por puerto serie)
       if (pollState == POLL_STATE_IDLE) {
+          /*
           if (millis() - lastPollTime > pollInterval) {
               responseReceived = false;
               currentAttempt = 1;
@@ -888,6 +949,7 @@ void loop() {
               PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
               pollNode(targetNode, cmd);
           }
+          */
       }
       // Estado en espera de respuesta: evaluar timeouts e intentos
       else if (pollState == POLL_STATE_WAITING_RESPONSE) {

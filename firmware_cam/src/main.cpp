@@ -126,7 +126,7 @@ const char* getFrameSizeName(int val) {
 
 // --- Definición del Menú con los valores por defecto iniciales ---
 MenuItem menu[] = {
-  {"Res. Imagen", 0, 21, 8, up_fs}, // Por defecto VGA (8)
+  {"Res. Imagen", 0, 21, 21, up_fs}, // Por defecto QSXGA (21)
   {"Brillo", -2, 2, 0, up_br},
   {"Contraste", -2, 2, 1, up_co},
   {"Saturacion", -2, 2, 0, up_sa},
@@ -207,7 +207,7 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 12000000;
+  config.xclk_freq_hz = 8000000;  // Reducido a 8MHz para bajar picos de corriente en QSXGA
   config.pixel_format = PIXFORMAT_JPEG;
   
   // Reservar el búfer máximo posible si hay PSRAM disponible para permitir cambios
@@ -216,7 +216,7 @@ void setup() {
     Serial.println("PSRAM DETECTED");
     config.frame_size = FRAMESIZE_QSXGA; // Límite en 5 megapíxeles.
     config.jpeg_quality = 14;            // Compresión de alta calidad.
-    config.fb_count = 2;                 // Búfer doble para evitar solapamientos gráficos.
+    config.fb_count = 1;                 // Búfer único para ahorrar memoria PSRAM en resoluciones ultra altas (QSXGA)
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
@@ -238,7 +238,10 @@ void setup() {
 
   s = esp_camera_sensor_get();
   
-  // Forzar la resolución inicial del menú (VGA)
+  // Forzar la resolución inicial del menú (VGA o QSXGA si hay PSRAM)
+  if (!psramFound() && menu[0].currentVal > 8) {
+    menu[0].currentVal = 8; // Forzar VGA si no hay PSRAM
+  }
   s->set_framesize(s, (framesize_t)menu[0].currentVal);
 
   // Inicialización de parámetros del sensor

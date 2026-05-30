@@ -20,6 +20,7 @@
 #include <SPI.h>
 #include <RadioLib.h>
 #include "lora_protocol.h"
+#include "LittleFS.h"
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
@@ -184,6 +185,13 @@ void drawDashboard() {
 void setup() {
   Serial.begin(115200);
   
+  // Inicializar LittleFS en la memoria Flash externa para almacenamiento temporal
+  if (!LittleFS.begin(true)) {
+    Serial.println("[ERROR] Error al montar LittleFS");
+  } else {
+    Serial.println("[INFO] LittleFS montado correctamente");
+  }
+  
   // Reservar suficiente búfer de hardware en RX UART para evitar el desborde y pérdida de bytes de cámara
   camSerial.setRxBufferSize(4096);
   camSerial.begin(115200, SERIAL_8N1, CAM_UART_RX, CAM_UART_TX);
@@ -347,6 +355,7 @@ void sendSensorTelemetry(uint8_t destId) {
  * Implementa 3 intentos robustos de lectura con vaciado de ruido residual del canal serie.
  */
 bool getChunkFromCam(uint32_t offset, uint32_t len, uint8_t* dest) {
+  unsigned long timeoutLimit = 1000 + len / 10; // Calcular timeout dinámico: 1s base + 100ms por cada 1KB (1000 baud UART safety)
   for (int retry = 0; retry < 3; retry++) {
       while(camSerial.available()) camSerial.read(); // Limpiar ruidos o bytes colgados en el búfer RX
       
@@ -357,7 +366,7 @@ bool getChunkFromCam(uint32_t offset, uint32_t len, uint8_t* dest) {
       uint32_t readBytes = 0;
       camSerial.setTimeout(500); // Límite de lectura UART
       
-      while (readBytes < len && millis() - start < 800) {
+      while (readBytes < len && millis() - start < timeoutLimit) {
           size_t readNow = camSerial.readBytes(dest + readBytes, len - readBytes);
           if (readNow > 0) {
               readBytes += readNow;
@@ -445,8 +454,8 @@ void requestAndSendImage(uint8_t destId) {
     }
   }
 
-  // Comprobación de límites lógicos
-  if (!imgIncoming || imgSize <= 0 || imgSize > 500000) {
+  // Comprobación de límites lógicos para imagen en Flash (soportamos hasta 512KB en Flash)
+  if (!imgIncoming || imgSize <= 0 || imgSize > 524288) {
     tft.fillRect(0, 42, 160, 10, TFT_BLACK);
     tft.setCursor(0, 42);
     tft.setTextColor(TFT_RED, TFT_BLACK);
@@ -457,6 +466,68 @@ void requestAndSendImage(uint8_t destId) {
     drawDashboard();
     return;
   }
+
+  // Abrir archivo temporal en la Flash usando LittleFS (modo escritura descarta la foto anterior)
+  File imgFile = LittleFS.open("/temp_img.jpg", "w");
+  if (!imgFile) {
+    tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+    tft.setCursor(0, 42);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("Estado: Err Inicializar Flash");
+    digitalWrite(CAM_EN, LOW);
+    radio.startReceive();
+    delay(1500);
+    drawDashboard();
+    return;
+  }
+
+  tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+  tft.setCursor(0, 42);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.print("Estado: Descargando a Flash...");
+
+  // Descargar en ráfagas de 200 bytes para no saturar la RAM
+  uint32_t bytesDownloaded = 0;
+  uint8_t tempBuffer[200];
+  bool downloadSuccess = true;
+
+  while (bytesDownloaded < imgSize) {
+    uint32_t lenToDownload = min((uint32_t)200, imgSize - bytesDownloaded);
+    if (getChunkFromCam(bytesDownloaded, lenToDownload, tempBuffer)) {
+      imgFile.write(tempBuffer, lenToDownload);
+      bytesDownloaded += lenToDownload;
+      
+      // Mostrar progreso en pantalla
+      tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+      tft.setCursor(0, 65);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.printf("Descarga: %d%%", (bytesDownloaded * 100) / imgSize);
+    } else {
+      downloadSuccess = false;
+      break;
+    }
+  }
+
+  imgFile.close();
+
+  if (!downloadSuccess) {
+    tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+    tft.setCursor(0, 42);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("Estado: Err Descarga Cam");
+    LittleFS.remove("/temp_img.jpg");
+    digitalWrite(CAM_EN, LOW);
+    radio.startReceive();
+    delay(1500);
+    drawDashboard();
+    return;
+  }
+
+  // --- ¡APAGADO INMEDIATO DE LA CÁMARA PARA AHORRO EXTREMO DE ENERGÍA! ---
+  // La imagen ya está guardada al 100% de manera permanente en la memoria Flash del Heltec.
+  // Apagamos la cámara físicamente para ahorrar energía durante la lenta transmisión por LoRa.
+  camSerial.println("RELEASE_PIC");
+  digitalWrite(CAM_EN, LOW);
 
   uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
 
@@ -509,35 +580,38 @@ void requestAndSendImage(uint8_t destId) {
   uint16_t chunkIndex = 1;
   uint32_t bytesSent = 0;
 
-  // Transmisión en bucle de los fragmentos
+  // Abrir el archivo de la imagen en modo lectura para iniciar el streaming LoRa
+  File readImgFile = LittleFS.open("/temp_img.jpg", "r");
+  if (!readImgFile) {
+    tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+    tft.setCursor(0, 42);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("Estado: Err Abrir Flash");
+    radio.startReceive();
+    delay(1500);
+    drawDashboard();
+    return;
+  }
+
+  // Transmisión en bucle de los fragmentos desde la Flash local
   while(bytesSent < imgSize) {
       uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - bytesSent);
       
-      // Obtener el fragmento de la cámara dinámicamente en lugar de almacenar toda la imagen en el Heap (RAM)
-      if (getChunkFromCam(bytesSent, chunkLen, packet.payload)) {
-          packet.header.seqNum = chunkIndex;
-          radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
-          bytesSent += chunkLen;
-          
-          tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-          tft.setCursor(0, 65);
-          tft.setTextColor(TFT_WHITE, TFT_BLACK);
-          tft.printf("%u / %u Chunks", (uint32_t)(chunkIndex - 1), totalChunks);
-          
-          // Aplicación estricta de pacing para prevención de colisiones por desbordamiento de búfer repetidor
-          delay(DELAY_TX); 
-      } else {
-          tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-          tft.setCursor(0, 42);
-          tft.setTextColor(TFT_RED, TFT_BLACK);
-          tft.printf("Estado: Err Cam %u", chunkIndex);
-          Serial.printf("Error UART: Omitiendo chunk %u tras fallar todos los reintentos UART\n", chunkIndex);
-          
-          // Incrementamos de todos modos el offset para asegurar alineación de secuencias y evitar bucles
-          // infinitos. El Concentrador lo pedirá explícitamente en la fase NACK.
-          bytesSent += chunkLen;
-          delay(100);
-      }
+      // Leer directamente el fragmento desde la memoria Flash
+      readImgFile.seek(bytesSent);
+      readImgFile.read(packet.payload, chunkLen);
+      
+      packet.header.seqNum = chunkIndex;
+      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
+      bytesSent += chunkLen;
+      
+      tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+      tft.setCursor(0, 65);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.printf("%u / %u Chunks", (uint32_t)(chunkIndex - 1), totalChunks);
+      
+      // Aplicación estricta de pacing para prevención de colisiones por desbordamiento de búfer repetidor
+      delay(DELAY_TX); 
       chunkIndex++; 
   }
 
@@ -622,19 +696,20 @@ void requestAndSendImage(uint8_t destId) {
 
                           packet.header.type = DATA_IMG_CHUNK;
                           
-                          // Retransmitir cada bloque pedido
+                          // Retransmitir cada bloque pedido leyendo de la memoria Flash local
                           for (uint16_t i = 0; i < missingCount; i++) {
                               uint16_t seq = sequences[i];
                               if (seq <= totalChunks) {
                                   uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
                                   uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - offset);
                                   
-                                  // Solicitar dinámicamente sobre el canal serie de la cámara
-                                  if (getChunkFromCam(offset, chunkLen, packet.payload)) {
-                                      packet.header.seqNum = seq;
-                                      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
-                                      Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u)\n", seq, offset, chunkLen);
-                                  }
+                                  // Leer directamente el fragmento desde la memoria Flash
+                                  readImgFile.seek(offset);
+                                  readImgFile.read(packet.payload, chunkLen);
+                                  
+                                  packet.header.seqNum = seq;
+                                  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
+                                  Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) desde Flash local\n", seq, offset, chunkLen);
                                   delay(DELAY_TX); // Respetar pacing de retransmisión
                               }
                           }
@@ -661,9 +736,8 @@ void requestAndSendImage(uint8_t destId) {
       delay(10);
   }
 
-  // Liberar recursos de hardware y apagar la cámara
-  camSerial.println("RELEASE_PIC");
-  digitalWrite(CAM_EN, LOW);
+  // Cerrar archivo de lectura y liberar recursos
+  readImgFile.close();
   radio.startReceive();
   delay(1000);
   drawDashboard();
