@@ -710,7 +710,7 @@ void requestAndSendImage(uint8_t destId) {
                                   packet.header.seqNum = seq;
                                   radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
                                   Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) desde Flash local\n", seq, offset, chunkLen);
-                                  delay(DELAY_TX); // Respetar pacing de retransmisión
+                                  delay(DELAY_TX + 40); // Pacing de retransmisión más holgado para evitar saturación del receptor por SD card writes
                               }
                           }
                           

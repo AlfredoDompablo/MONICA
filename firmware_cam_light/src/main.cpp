@@ -113,7 +113,7 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 8000000;  // Reducido a 8MHz para bajar picos de corriente en QSXGA
+  config.xclk_freq_hz = 12000000;  // Reducido a 8MHz para bajar picos de corriente en QSXGA
   config.pixel_format = PIXFORMAT_JPEG;
   
   // Determinar la locación de búfer física de manera dinámica según la presencia de memoria PSRAM

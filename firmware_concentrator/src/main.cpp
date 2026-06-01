@@ -548,10 +548,12 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             Serial.printf("IMG_CHUNK seq %d (%u bytes guardados en SD en offset %u)\n", seq, payloadLen, offset);
         }
         
-        tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-        tft.setCursor(0, 65);
-        tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.printf("%u / %u Chunks", (uint32_t)seq, totalChunks);
+        if (seq % 10 == 0 || seq == totalChunks) {
+            tft.fillRect(0, 65, 160, 12, TFT_BLACK);
+            tft.setCursor(0, 65);
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.printf("%u / %u Chunks", (uint32_t)seq, totalChunks);
+        }
     }
     // --- LOTE DE CONFIRMACIÓN Y CIERRE ---
     else if (packet->header.type == DATA_IMG_END) {
