@@ -82,8 +82,23 @@ export async function POST(request: Request) {
 
         const body = await request.json();
 
-        // FORZAR el node_id del nodo autenticado (previene spoofing)
-        body.node_id = node.node_id;
+        // Si el nodo autenticado es el Concentrador (Master Gateway), preservamos el node_id del payload
+        if (node.node_id === 'NODE_C') {
+            if (!body.node_id) {
+                body.node_id = node.node_id;
+            } else {
+                // Validar que el nodo destino exista y esté activo
+                const targetNode = await prisma.node.findUnique({
+                    where: { node_id: body.node_id }
+                });
+                if (!targetNode || !targetNode.is_active) {
+                    return NextResponse.json({ error: 'Target node is invalid or inactive' }, { status: 400 });
+                }
+            }
+        } else {
+            // Si es un nodo normal, forzar su propio node_id (previene spoofing)
+            body.node_id = node.node_id;
+        }
 
         const {
             node_id,

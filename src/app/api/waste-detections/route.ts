@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
 import { uploadFile } from '@/lib/s3';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 
 /**
  * GET /api/waste-detections
@@ -58,12 +59,48 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: Request) {
     try {
+        // 1. Validar Hardware Auth (API Key)
+        const apiKey = request.headers.get('x-api-key');
+        if (!apiKey) {
+            return NextResponse.json({ error: 'Missing API Key' }, { status: 401 });
+        }
+
+        // Calcular hash SHA-256
+        const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
+
+        // Buscar nodo activo con ese hash
+        const node = await prisma.node.findUnique({
+            where: { key_hash: hash }
+        });
+
+        if (!node || !node.is_active) {
+            return NextResponse.json({ error: 'Invalid or inactive API Key' }, { status: 401 });
+        }
+
         const body = await request.json();
-        const {
+        let {
             node_id,
             image_original_base64,
             model_version // Opcional, el AI Service devolverá el real
         } = body;
+
+        // Si el nodo autenticado es el Concentrador (Master Gateway), preservamos el node_id del payload
+        if (node.node_id === 'NODE_C') {
+            if (!node_id) {
+                node_id = node.node_id;
+            } else {
+                // Validar que el nodo destino exista y esté activo
+                const targetNode = await prisma.node.findUnique({
+                    where: { node_id }
+                });
+                if (!targetNode || !targetNode.is_active) {
+                    return NextResponse.json({ error: 'Target node is invalid or inactive' }, { status: 400 });
+                }
+            }
+        } else {
+            // Si es un nodo normal, forzar su propio node_id (previene spoofing)
+            node_id = node.node_id;
+        }
 
         if (!node_id || !image_original_base64) {
             return NextResponse.json(
