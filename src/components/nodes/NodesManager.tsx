@@ -75,17 +75,6 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
           setDescriptionError('La descripción debe tener entre 5 y 100 caracteres.');
           return;
       }
-      const lat = parseFloat(formData.get('latitude') as string);
-      const lng = parseFloat(formData.get('longitude') as string);
-
-      if (lat < -90 || lat > 90) {
-          alert('La latitud debe estar entre -90 y 90');
-          return;
-      }
-      if (lng < -180 || lng > 180) {
-          alert('La longitud debe estar entre -180 y 180');
-          return;
-      }
 
       let result;
       if (editingNode) {
@@ -97,11 +86,20 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
       if (result.success) {
           formRef.current?.reset();
           setEditingNode(null);
-          // Optional: toast
       } else {
           alert(result.message);
       }
   };
+
+  const concentrators = nodes.filter(n => 
+    n.node_id.toUpperCase().startsWith('NODE_C') || 
+    n.node_id.toUpperCase().startsWith('CONC')
+  );
+
+  const sensors = nodes.filter(n => 
+    !n.node_id.toUpperCase().startsWith('NODE_C') && 
+    !n.node_id.toUpperCase().startsWith('CONC')
+  );
 
   return (
     <div className="flex flex-col lg:flex-row gap-8">
@@ -130,7 +128,7 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">ID del Nodo</label>
               <input 
                 name="node_id" 
-                placeholder="Ej. ESP32_RIO_SUCIO" 
+                placeholder="Ej. CONC_NORTE o NODE_005" 
                 required
                 readOnly={!!editingNode}
                 defaultValue={editingNode?.node_id || ''}
@@ -142,7 +140,11 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
                   ⚠️ {idError}
                 </p>
               )}
-              {!editingNode && !idError && <p className="text-xs text-gray-500 mt-1">Debe ser único y sin espacios.</p>}
+              {!editingNode && !idError && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Usa el prefijo <span className="font-semibold text-blue-600">CONC_</span> o <span className="font-semibold text-blue-600">NODE_C</span> para registrar un concentrador. De lo contrario, se registrará como un nodo sensor.
+                </p>
+              )}
             </div>
 
             <div>
@@ -161,51 +163,6 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
                   ⚠️ {descriptionError}
                 </p>
               )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Latitud</label>
-                <input 
-                  name="latitude" 
-                  type="number" 
-                  step="any" 
-                  min="-90"
-                  max="90"
-                  required
-                  key={editingNode ? `lat-${editingNode.node_id}` : 'lat-new'}
-                  defaultValue={editingNode?.latitude?.toString() || '0'}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    if (!isNaN(val)) {
-                      if (val > 90) e.target.value = "90";
-                      if (val < -90) e.target.value = "-90";
-                    }
-                  }}
-                  className="w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 py-2 px-3 border"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Longitud</label>
-                <input 
-                  name="longitude" 
-                  type="number" 
-                  step="any" 
-                  min="-180"
-                  max="180"
-                  required
-                  key={editingNode ? `lng-${editingNode.node_id}` : 'lng-new'}
-                  defaultValue={editingNode?.longitude?.toString() || '0'}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    if (!isNaN(val)) {
-                      if (val > 180) e.target.value = "180";
-                      if (val < -180) e.target.value = "-180";
-                    }
-                  }}
-                  className="w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 py-2 px-3 border"
-                />
-              </div>
             </div>
 
             <div className="flex gap-2 pt-2">
@@ -230,9 +187,23 @@ export default function NodesManager({ nodes }: { nodes: any[] }) {
         </div>
       </div>
 
-      {/* Tabla (Derecha) - Ocupa el resto */}
-      <div className="flex-1 min-w-0">
-         <NodeTable nodes={nodes} onEdit={handleEdit} />
+      {/* Tablas (Derecha) - Ocupa el resto */}
+      <div className="flex-1 min-w-0 space-y-8">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+            Concentradores
+          </h2>
+          <NodeTable nodes={concentrators} onEdit={handleEdit} isConcentratorTable={true} />
+        </div>
+
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+            Nodos Sensores
+          </h2>
+          <NodeTable nodes={sensors} onEdit={handleEdit} isConcentratorTable={false} />
+        </div>
       </div>
     </div>
   );

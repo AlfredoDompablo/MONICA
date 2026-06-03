@@ -8,8 +8,6 @@ import { z } from 'zod';
 const createNodeSchema = z.object({
     node_id: z.string().min(3).max(20),
     description: z.string().min(5).max(100),
-    latitude: z.number().min(-90).max(90),
-    longitude: z.number().min(-180).max(180),
 });
 
 export async function createNode(prevState: any, formData: FormData) {
@@ -17,15 +15,16 @@ export async function createNode(prevState: any, formData: FormData) {
         const rawData = {
             node_id: formData.get('node_id'),
             description: formData.get('description'),
-            latitude: parseFloat(formData.get('latitude') as string),
-            longitude: parseFloat(formData.get('longitude') as string),
         };
 
         const data = createNodeSchema.parse(rawData);
 
         await prisma.node.create({
             data: {
-                ...data,
+                node_id: data.node_id,
+                description: data.description,
+                latitude: 19.4326,  // Coordenadas base iniciales por defecto (Cuauhtémoc)
+                longitude: -99.1332,
                 is_active: true,
             },
         });
@@ -42,21 +41,18 @@ export async function updateNode(prevState: any, formData: FormData) {
     try {
         const rawData = {
             description: formData.get('description') as string,
-            latitude: parseFloat(formData.get('latitude') as string),
-            longitude: parseFloat(formData.get('longitude') as string),
         };
         const node_id = formData.get('node_id') as string;
 
-        // Basic validation (using partial or manual)
-        if (rawData.latitude < -90 || rawData.latitude > 90) throw new Error('Latitud inválida');
-        if (rawData.longitude < -180 || rawData.longitude > 180) throw new Error('Longitud inválida');
+        // Validación básica
+        if (!rawData.description || rawData.description.length < 5 || rawData.description.length > 100) {
+            throw new Error('La descripción debe tener entre 5 y 100 caracteres');
+        }
 
         await prisma.node.update({
             where: { node_id },
             data: {
                 description: rawData.description,
-                latitude: rawData.latitude,
-                longitude: rawData.longitude
             },
         });
 

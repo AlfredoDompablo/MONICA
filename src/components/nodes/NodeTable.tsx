@@ -15,7 +15,15 @@ type Node = {
   longitude: number | string;
 };
 
-export default function NodeTable({ nodes, onEdit }: { nodes: Node[], onEdit: (node: Node) => void }) {
+export default function NodeTable({ 
+  nodes, 
+  onEdit, 
+  isConcentratorTable 
+}: { 
+  nodes: Node[], 
+  onEdit: (node: Node) => void,
+  isConcentratorTable: boolean
+}) {
   const [loading, setLoading] = useState<string | null>(null);
   const [modalData, setModalData] = useState<{ isOpen: boolean; apiKey: string | null; nodeId: string }>({
     isOpen: false,
@@ -100,13 +108,19 @@ export default function NodeTable({ nodes, onEdit }: { nodes: Node[], onEdit: (n
                   )}
                 </td>
                 <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                  {node.key_hash ? (
-                    <span className="text-green-600 dark:text-green-400 flex items-center gap-1 text-xs">
-                       <Key size={14} /> Configurado
-                    </span>
+                  {isConcentratorTable ? (
+                    node.key_hash ? (
+                      <span className="text-green-600 dark:text-green-400 flex items-center gap-1 text-xs">
+                         <Key size={14} /> Configurado
+                      </span>
+                    ) : (
+                      <span className="text-yellow-600 dark:text-yellow-400 flex items-center gap-1 text-xs font-semibold animate-pulse">
+                         ⚠️ Sin configurar
+                      </span>
+                    )
                   ) : (
-                    <span className="text-yellow-600 dark:text-yellow-400 flex items-center gap-1 text-xs">
-                       ⚠️ Sin configurar
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30">
+                      Enrutado vía Concentrador
                     </span>
                   )}
                 </td>
@@ -120,14 +134,16 @@ export default function NodeTable({ nodes, onEdit }: { nodes: Node[], onEdit: (n
                     <Pencil size={18} />
                   </button>
 
-                  <button
-                    onClick={() => handleGenerateKey(node.node_id)}
-                    disabled={loading === node.node_id}
-                    className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 p-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
-                    title="Generar nueva API Key"
-                  >
-                    {loading === node.node_id ? <RefreshCw size={18} className="animate-spin" /> : <Key size={18} />}
-                  </button>
+                  {isConcentratorTable && (
+                    <button
+                      onClick={() => handleGenerateKey(node.node_id)}
+                      disabled={loading === node.node_id}
+                      className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 p-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+                      title="Generar nueva API Key"
+                    >
+                      {loading === node.node_id ? <RefreshCw size={18} className="animate-spin" /> : <Key size={18} />}
+                    </button>
+                  )}
                   
                   <button
                     onClick={() => handleToggleStatus(node.node_id, node.is_active)}
