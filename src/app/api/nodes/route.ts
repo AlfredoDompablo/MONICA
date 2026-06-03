@@ -5,6 +5,8 @@ import { authOptions } from '@/lib/auth';
 import { nodeSchema } from '@/lib/schemas';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/nodes
  * 
@@ -15,6 +17,11 @@ import { z } from 'zod';
 export async function GET() {
     try {
         const nodes = await prisma.node.findMany({
+            where: {
+                node_id: {
+                    not: 'NODE_C'
+                }
+            },
             orderBy: { node_id: 'asc' },
             include: {
                 sensor_readings: {

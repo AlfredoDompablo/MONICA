@@ -23,6 +23,10 @@ export async function GET(
         const { id } = await params;
         const nodeId = id; // node_id es string
 
+        if (nodeId === 'NODE_C') {
+            return NextResponse.json({ error: 'Nodo no encontrado' }, { status: 404 });
+        }
+
         const node = await prisma.node.findUnique({
             where: { node_id: nodeId },
         });

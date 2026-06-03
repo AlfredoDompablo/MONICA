@@ -30,7 +30,22 @@ export async function GET(request: Request) {
     const where: any = {};
 
     if (nodeId) {
+        if (nodeId === 'NODE_C') {
+            return NextResponse.json({
+                data: [],
+                pagination: {
+                    total: 0,
+                    page,
+                    limit,
+                    totalPages: 0,
+                },
+            });
+        }
         where.node_id = nodeId;
+    } else {
+        where.node_id = {
+            not: 'NODE_C'
+        };
     }
 
     if (startDate || endDate) {

@@ -21,7 +21,16 @@ export async function GET(request: NextRequest) {
         const limit = parseInt(searchParams.get('limit') || '20');
 
         const where: any = {};
-        if (node_id) where.node_id = node_id;
+        if (node_id) {
+            if (node_id === 'NODE_C') {
+                return NextResponse.json([]);
+            }
+            where.node_id = node_id;
+        } else {
+            where.node_id = {
+                not: 'NODE_C'
+            };
+        }
 
         // No incluimos datos binarios por defecto para no sobrecargar la respuesta
         const detections = await prisma.wasteDetection.findMany({
@@ -86,15 +95,30 @@ export async function POST(request: Request) {
 
         // Si el nodo autenticado es el Concentrador (Master Gateway), preservamos el node_id del payload
         if (node.node_id === 'NODE_C') {
-            if (!node_id) {
-                node_id = node.node_id;
+            if (!node_id || node_id === 'NODE_C') {
+                return NextResponse.json({ error: 'Concentrador gateway does not submit its own detections' }, { status: 400 });
             } else {
-                // Validar que el nodo destino exista y esté activo
-                const targetNode = await prisma.node.findUnique({
+                // Validar si el nodo destino existe
+                let targetNode = await prisma.node.findUnique({
                     where: { node_id }
                 });
-                if (!targetNode || !targetNode.is_active) {
-                    return NextResponse.json({ error: 'Target node is invalid or inactive' }, { status: 400 });
+                
+                // Si el nodo no existe, lo registramos automáticamente (Auto-Registro)
+                if (!targetNode) {
+                    targetNode = await prisma.node.create({
+                        data: {
+                            node_id: node_id,
+                            description: `Auto-registrado (${node_id})`,
+                            latitude: 19.4326, // Coordenadas base locales
+                            longitude: -99.1332,
+                            is_active: true,
+                            key_hash: null, // No necesita API key individual
+                            last_seen: new Date(),
+                        }
+                    });
+                    console.log(`[Auto-Registro] Nuevo nodo sensor '${node_id}' registrado automáticamente durante detección de residuos.`);
+                } else if (!targetNode.is_active) {
+                    return NextResponse.json({ error: 'Target node is inactive' }, { status: 400 });
                 }
             }
         } else {

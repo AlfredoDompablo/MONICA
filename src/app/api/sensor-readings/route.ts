@@ -23,7 +23,16 @@ export async function GET(request: NextRequest) {
         const endDate = searchParams.get('endDate');
 
         const where: any = {};
-        if (node_id) where.node_id = node_id;
+        if (node_id) {
+            if (node_id === 'NODE_C') {
+                return NextResponse.json([]);
+            }
+            where.node_id = node_id;
+        } else {
+            where.node_id = {
+                not: 'NODE_C'
+            };
+        }
         if (startDate || endDate) {
             where.timestamp = {};
             if (startDate) where.timestamp.gte = new Date(startDate);
@@ -84,15 +93,41 @@ export async function POST(request: Request) {
 
         // Si el nodo autenticado es el Concentrador (Master Gateway), preservamos el node_id del payload
         if (node.node_id === 'NODE_C') {
-            if (!body.node_id) {
-                body.node_id = node.node_id;
+            if (!body.node_id || body.node_id === 'NODE_C') {
+                return NextResponse.json({ error: 'Concentrador gateway does not submit its own readings' }, { status: 400 });
             } else {
-                // Validar que el nodo destino exista y esté activo
-                const targetNode = await prisma.node.findUnique({
+                // Validar si el nodo destino existe
+                let targetNode = await prisma.node.findUnique({
                     where: { node_id: body.node_id }
                 });
-                if (!targetNode || !targetNode.is_active) {
-                    return NextResponse.json({ error: 'Target node is invalid or inactive' }, { status: 400 });
+                
+                // Si el nodo no existe, lo registramos automáticamente (Auto-Registro)
+                if (!targetNode) {
+                    let lat = 19.4326;
+                    let lng = -99.1332;
+                    if (body.latitude !== undefined && body.latitude !== null) {
+                        const parsedLat = parseFloat(body.latitude);
+                        if (!isNaN(parsedLat)) lat = parsedLat;
+                    }
+                    if (body.longitude !== undefined && body.longitude !== null) {
+                        const parsedLng = parseFloat(body.longitude);
+                        if (!isNaN(parsedLng)) lng = parsedLng;
+                    }
+
+                    targetNode = await prisma.node.create({
+                        data: {
+                            node_id: body.node_id,
+                            description: `Auto-registrado (${body.node_id})`,
+                            latitude: lat,
+                            longitude: lng,
+                            is_active: true,
+                            key_hash: null, // No necesita API key individual
+                            last_seen: new Date(),
+                        }
+                    });
+                    console.log(`[Auto-Registro] Nuevo nodo sensor '${body.node_id}' registrado automáticamente.`);
+                } else if (!targetNode.is_active) {
+                    return NextResponse.json({ error: 'Target node is inactive' }, { status: 400 });
                 }
             }
         } else {
