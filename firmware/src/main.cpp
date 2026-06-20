@@ -24,10 +24,14 @@
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
-#define MY_NODE_ID 4
+#define MY_NODE_ID 2
 
 // --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
-#define VEXT_PIN 3            // Control del suministro de energía a sensores externos y periféricos.
+#if MY_NODE_ID == 2
+  #define VEXT_PIN 37           // Control de energía para V1.0 (Nodo 2)
+#else
+  #define VEXT_PIN 3            // Control de energía para V1.1 (Nodo 1 y Concentrador)
+#endif
 #define BACKLIGHT_PIN 21      // Pin de control del brillo de la pantalla TFT.
 #define GNSS_RX_PIN 33        // Pin de recepción UART para el módulo de posicionamiento GNSS (GPS).
 #define GNSS_TX_PIN 34        // Pin de transmisión UART para el módulo de posicionamiento GNSS (GPS).
@@ -197,8 +201,10 @@ void setup() {
   camSerial.begin(115200, SERIAL_8N1, CAM_UART_RX, CAM_UART_TX);
   
   // Configuración y encendido de reguladores internos de hardware
-  pinMode(VEXT_PIN, OUTPUT);
-  digitalWrite(VEXT_PIN, HIGH);       // Activar el bus Vext de alimentación periférica.
+  pinMode(3, OUTPUT);
+  digitalWrite(3, HIGH);
+  pinMode(37, OUTPUT);
+  digitalWrite(37, HIGH);
   pinMode(BACKLIGHT_PIN, OUTPUT);
   digitalWrite(BACKLIGHT_PIN, HIGH);  // Encender retroiluminación de pantalla LCD.
   pinMode(CAM_EN, OUTPUT);
@@ -433,29 +439,41 @@ void requestAndSendImage(uint8_t destId) {
   tft.print("Espere 2 segundos...");
   
   // Encender la cámara ESP32-CAM físicamente liberando energía
+  Serial.println("[CAMERA DEBUG] Encendiendo camara fisicamente (CAM_EN = HIGH)...");
   digitalWrite(CAM_EN, HIGH);
   delay(2000); // Tiempo de arranque necesario para inicialización de CMOS de cámara
   
+  Serial.println("[CAMERA DEBUG] Vaciando buffer RX de camSerial...");
   while(camSerial.available()) camSerial.read(); // Limpiar remanentes serie
   
   // Solicitar disparo de foto
+  Serial.println("[CAMERA DEBUG] Enviando TAKE_PIC a la camara...");
   camSerial.println("TAKE_PIC");
   
   unsigned long waitStart = millis();
   bool imgIncoming = false;
   uint32_t imgSize = 0;
   
-  // Leer tamaño de imagen entrante (4 bytes raw)
-  while(millis() - waitStart < 5000) {
-    if(camSerial.available() >= 4) {
-      camSerial.readBytes((uint8_t*)&imgSize, 4);
-      imgIncoming = true;
-      break;
+  // Leer tamaño de imagen entrante en forma de palabra (ej: "SIZE:12345")
+  Serial.println("[CAMERA DEBUG] Esperando respuesta de tamano (SIZE)...");
+  while(millis() - waitStart < 8000) {
+    if(camSerial.available()) {
+      String line = camSerial.readStringUntil('\n');
+      line.trim();
+      Serial.printf("[CAMERA DEBUG] Recibido de camara: '%s'\n", line.c_str());
+      if (line.startsWith("SIZE:")) {
+        imgSize = line.substring(5).toInt();
+        if (imgSize > 0) {
+          imgIncoming = true;
+          break;
+        }
+      }
     }
   }
 
-  // Comprobación de límites lógicos para imagen en Flash (soportamos hasta 512KB en Flash)
-  if (!imgIncoming || imgSize <= 0 || imgSize > 524288) {
+  // Comprobación de límites lógicos para imagen en Flash (soportamos hasta 2MB en Flash)
+  if (!imgIncoming || imgSize <= 0 || imgSize > 2097152) {
+    Serial.printf("[CAMERA DEBUG] ERROR: Peticion de imagen fallida o tamano excede el limite. imgIncoming=%d, imgSize=%u\n", imgIncoming, imgSize);
     tft.fillRect(0, 42, 160, 10, TFT_BLACK);
     tft.setCursor(0, 42);
     tft.setTextColor(TFT_RED, TFT_BLACK);
@@ -467,9 +485,11 @@ void requestAndSendImage(uint8_t destId) {
     return;
   }
 
+  Serial.printf("[CAMERA DEBUG] Tamano de imagen valido recibido: %u bytes. Creando /temp_img.jpg en LittleFS...\n", imgSize);
   // Abrir archivo temporal en la Flash usando LittleFS (modo escritura descarta la foto anterior)
   File imgFile = LittleFS.open("/temp_img.jpg", "w");
   if (!imgFile) {
+    Serial.println("[CAMERA DEBUG] ERROR: No se pudo abrir /temp_img.jpg en LittleFS!");
     tft.fillRect(0, 42, 160, 10, TFT_BLACK);
     tft.setCursor(0, 42);
     tft.setTextColor(TFT_RED, TFT_BLACK);
@@ -487,6 +507,7 @@ void requestAndSendImage(uint8_t destId) {
   tft.print("Estado: Descargando a Flash...");
 
   // Descargar en ráfagas de 200 bytes para no saturar la RAM
+  Serial.println("[CAMERA DEBUG] Iniciando descarga de fragmentos de camara...");
   uint32_t bytesDownloaded = 0;
   uint8_t tempBuffer[200];
   bool downloadSuccess = true;
@@ -504,6 +525,7 @@ void requestAndSendImage(uint8_t destId) {
       tft.printf("Descarga: %d%%", (bytesDownloaded * 100) / imgSize);
     } else {
       downloadSuccess = false;
+      Serial.printf("[CAMERA DEBUG] ERROR: Fallo al descargar chunk en offset %u!\n", bytesDownloaded);
       break;
     }
   }
@@ -511,6 +533,7 @@ void requestAndSendImage(uint8_t destId) {
   imgFile.close();
 
   if (!downloadSuccess) {
+    Serial.println("[CAMERA DEBUG] ERROR: Descarga incompleta, eliminando archivo temporal.");
     tft.fillRect(0, 42, 160, 10, TFT_BLACK);
     tft.setCursor(0, 42);
     tft.setTextColor(TFT_RED, TFT_BLACK);
@@ -523,6 +546,7 @@ void requestAndSendImage(uint8_t destId) {
     return;
   }
 
+  Serial.println("[CAMERA DEBUG] Descarga a Flash exitosa. Liberando frame buffer en camara y apagando...");
   // --- ¡APAGADO INMEDIATO DE LA CÁMARA PARA AHORRO EXTREMO DE ENERGÍA! ---
   // La imagen ya está guardada al 100% de manera permanente en la memoria Flash del Heltec.
   // Apagamos la cámara físicamente para ahorrar energía durante la lenta transmisión por LoRa.

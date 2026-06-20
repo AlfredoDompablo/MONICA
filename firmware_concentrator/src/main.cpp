@@ -28,117 +28,123 @@
 #include "secrets.h"
 #include "lora_protocol.h"
 
-// --- Definiciones de Hardware del Concentrador ---
-#define MY_NODE_ID 0          // Identificador fijo e inalterable del Concentrador Central.
+// ============================================================================
+// --- DEFINICIONES DE HARDWARE DEL CONCENTRADOR ---
+// ============================================================================
+#define MY_NODE_ID 0          ///< Identificador único e inalterable del Concentrador Central
+#define VEXT_PIN 3            ///< Control del regulador de energía para periféricos y pantalla
+#define BACKLIGHT_PIN 21      ///< Pin PWM/Digital para la retroiluminación de la pantalla TFT
+#define GNSS_RX_PIN 33        ///< Receptor UART RX para el módulo GPS/GNSS
+#define GNSS_TX_PIN 34        ///< Transmisor UART TX para el módulo GPS/GNSS
 
-#define VEXT_PIN 3            // Control del suministro de energía a la pantalla y periféricos.
-#define BACKLIGHT_PIN 21      // Pin de control del brillo de la pantalla TFT.
-#define GNSS_RX_PIN 33        // Pin de recepción UART para el receptor GNSS/GPS.
-#define GNSS_TX_PIN 34        // Pin de transmisión UART para el receptor GNSS/GPS.
+// ============================================================================
+// --- CONFIGURACIÓN DE PINES SPI PARA EL RADIO LORA (Bus Interno Heltec) ---
+// ============================================================================
+#define LORA_CS   8           ///< Chip Select de LoRa SPI
+#define LORA_SCK  9           ///< Reloj SCK de LoRa SPI
+#define LORA_MOSI 10          ///< Salida de datos MOSI de LoRa SPI
+#define LORA_MISO 11          ///< Entrada de datos MISO de LoRa SPI
+#define LORA_RST  12          ///< Pin físico de reinicio del transceptor LoRa
+#define LORA_BUSY 13          ///< Pin busy de estado del SX1262
+#define LORA_DIO1 14          ///< Interrupción física de eventos del SX1262 (DIO1)
 
-// --- Pines del Bus SPI para el Transceptor LoRa (Internos de Heltec) ---
-#define LORA_CS   8           // Chip Select de LoRa.
-#define LORA_SCK  9           // Reloj de bus LoRa SPI.
-#define LORA_MOSI 10          // Salida de datos LoRa SPI.
-#define LORA_MISO 11          // Entrada de datos LoRa SPI.
-#define LORA_RST  12          // Pin de reinicio LoRa.
-#define LORA_BUSY 13          // Pin ocupado LoRa.
-#define LORA_DIO1 14          // Pin de interrupción de eventos LoRa.
-
-// --- Pines del Bus SPI Dedicado para Tarjeta SD (Puerto Secundario HSPI) ---
+// ============================================================================
+// --- CONFIGURACIÓN DE PINES SPI PARA LA TARJETA SD (Puerto Secundario HSPI) ---
+// ============================================================================
 // La reubicación de la SD al bus HSPI resolvió la colisión y bloqueo físico que causaba
 // usar el mismo bus compartido del transceptor LoRa con pines diferentes.
-#define SD_MISO 4             // Master In Slave Out para SD.
-#define SD_MOSI 5             // Master Out Slave In para SD.
-#define SD_SCK  6             // Reloj SPI para SD.
-#define SD_CS   7             // Chip Select para SD.
+#define SD_MISO 4             ///< Entrada de datos MISO para tarjeta SD
+#define SD_MOSI 5             ///< Salida de datos MOSI para tarjeta SD
+#define SD_SCK  6             ///< Reloj SPI para tarjeta SD
+#define SD_CS   7             ///< Chip Select (Habilitador) para tarjeta SD
 
-// --- Instanciación de Objetos y Punteros de Buses Dinámicos ---
-TinyGPSPlus gps;             // Decodificador de ráfagas GPS.
-TFT_eSPI tft = TFT_eSPI();   // Controlador gráfico del display LCD.
+// ============================================================================
+// --- INSTANCIACIÓN DE OBJETOS GLOBALES ---
+// ============================================================================
+TinyGPSPlus gps;              ///< Decodificador de sentencias GPS NMEA
+TFT_eSPI tft = TFT_eSPI();    ///< Controlador de visualización de la pantalla TFT
 
 /**
- * Puntero al bus SPI secundario para la tarjeta SD.
+ * @brief Puntero al bus SPI secundario para la tarjeta SD.
  * Declarado como puntero global para evitar la ejecución prematura del constructor de SPIClass
  * antes de que termine el bootloader del ESP32-S3, solucionando un bootloop silencioso de hardware
  * por inicializaciones estáticas duplicadas de puertos con la librería TFT_eSPI.
  */
 SPIClass* spiSD = nullptr; 
 
-// Controlador de radio LoRa
+/// Transceptor LoRa SX1262 asociado al bus SPI FSPI predeterminado
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
-// --- Variables de Estado para la Tarjeta SD ---
-bool sdMounted = false;       // Bandera de control de montaje exitoso de la tarjeta SD.
-File currentImgFile;          // Descriptor de archivo para lectura.
-bool isImgFileOpen = false;   // Indicador de estado de apertura de archivo de lectura.
+// ============================================================================
+// --- VARIABLES DE ESTADO Y FLUJO ---
+// ============================================================================
+bool sdMounted = false;       ///< Indica si la tarjeta SD fue montada con éxito
+File currentImgFile;          ///< Descriptor de archivo de imagen para lectura
+bool isImgFileOpen = false;   ///< Estado de apertura del archivo de imagen
 
-File activeFile;              // Descriptor de archivo activo en el que se graban los chunks de imagen.
-bool isFileActive = false;    // Indicador de sesión de escritura de streaming en progreso.
+File activeFile;              ///< Descriptor de archivo para escritura de imagen en progreso
+bool isFileActive = false;    ///< Estado de sesión de descarga de imagen
 
-// --- Variables del Búfer de Streaming y Fragmentación ---
-uint16_t expectedSeqNum = 0;           // 0 indica inactividad. >= 1 indica índice del fragmento esperado.
-unsigned long lastChunkReceivedTime = 0; // Marca de tiempo (millis) para la prevención y timeouts de sesión colgada.
-bool* chunkReceived = NULL;            // Bitmap en RAM dinámico para el control selectivo de pérdidas (NACK).
-uint16_t totalChunks = 0;              // Cantidad total esperada de fragmentos de imagen.
-uint32_t imgSize = 0;                  // Tamaño total en bytes de la imagen capturada.
+uint16_t expectedSeqNum = 0;             ///< Fragmento de secuencia esperado. 0 significa sesión inactiva.
+unsigned long lastChunkReceivedTime = 0;  ///< Último milisegundo en que se recibió un fragmento (Timeout check)
+bool* chunkReceived = NULL;              ///< Bitmap dinámico en RAM para control de retransmisión selectiva (ARQ)
+uint16_t totalChunks = 0;                ///< Número total de fragmentos de la imagen activa
+uint32_t imgSize = 0;                    ///< Tamaño neto en bytes de la imagen capturada
 
-// --- Máquina de Estados del Polling Periódico y Fiabilidad ---
-unsigned long lastPollTime = 0;        // Marca de tiempo del último ciclo de muestreo.
-const unsigned long pollInterval = 30000; // Intervalo de polling por defecto (30 segundos).
-uint8_t targetNode = 1;                // Nodo objetivo actual de la red lineal (1 al 4).
-bool pollForImage = false;             // Bandera alternante para solicitar telemetría o disparo de cámara.
-uint16_t packetSequence = 0;           // Secuencia incremental de paquetes de comando salientes.
+unsigned long lastPollTime = 0;          ///< Última vez que se sondeó un nodo
+const unsigned long pollInterval = 30000;///< Intervalo de sondeo (30 segundos)
+uint8_t targetNode = 1;                  ///< Nodo actual sondeado
+bool pollForImage = false;               ///< Bandera alternante para solicitar telemetría o imagen
+uint16_t packetSequence = 0;             ///< Secuenciador incremental de paquetes LoRa
 
 enum PollingState {
-    POLL_STATE_IDLE,                   // Estado de espera pasiva entre intervalos.
-    POLL_STATE_WAITING_RESPONSE        // Esperando respuesta LoRa o ACK del nodo sensor.
+    POLL_STATE_IDLE,                     ///< Concentrador en reposo
+    POLL_STATE_WAITING_RESPONSE          ///< Concentrador esperando ACK o datos del nodo sensor
 };
 PollingState pollState = POLL_STATE_IDLE;
 
-uint8_t currentAttempt = 0;            // Contador de intentos del comando actual (máximo 3).
-unsigned long requestSentTime = 0;     // Registro del momento en que se transmitió la solicitud.
-unsigned long currentTimeout = 3000;   // Timeout dinámico de respuesta (3.5s para telemetría, 6s para fotos).
-volatile bool responseReceived = false; // Bandera de interrupción lógica que indica recepción exitosa.
+uint8_t currentAttempt = 0;              ///< Intento actual para la solicitud de red (máximo 3)
+unsigned long requestSentTime = 0;       ///< Momento exacto de envío de la solicitud
+unsigned long currentTimeout = 3000;     ///< Límite de tiempo dinámico de respuesta
+volatile bool responseReceived = false;   ///< Bandera lógica que indica respuesta correcta
 
+// ============================================================================
+// --- CLASE OPTIMIZADA: ImagePayloadStream ---
+// ============================================================================
 /**
  * @class ImagePayloadStream
- * @brief Clase de flujo personalizada (Stream) para codificar imágenes a Base64 en caliente.
+ * @brief Flujo de transmisión (Stream) para codificar archivos a Base64 en caliente.
  * 
- * Esta clase es una de las mayores optimizaciones del Concentrador. Hereda de Stream, lo que permite
- * al cliente HTTPClient de ESP32 leer datos de ella bajo demanda para la petición POST.
- * 
- * En lugar de leer toda la imagen JPG desde la SD a la RAM, codificarla en Base64 en RAM (lo cual
- * consumiría hasta 3 veces el tamaño del archivo y provocaría un colapso por falta de memoria Heap),
- * esta clase lee bloques secuenciales de la SD de 512 bytes, los codifica a Base64 bajo demanda de 3 en 3 bytes,
- * e inyecta dinámicamente los metadatos JSON al inicio (`prefix`) y fin (`suffix`) del stream.
+ * Diseñado bajo arquitectura de "Zero-Memory Overhead". En lugar de leer toda la imagen JPG
+ * de la SD a la memoria RAM (lo que provocaría un desbordamiento del Heap en el ESP32-S3),
+ * esta clase lee bloques secuenciales de la SD de 512 bytes, codifica de 3 en 3 bytes a Base64
+ * sobre la marcha a medida que el cliente HTTPClient lee del Stream, e inyecta dinámicamente
+ * las cabeceras y cierres del formato JSON.
  */
 class ImagePayloadStream : public Stream {
 private:
-    File _file;              // Archivo JPG físico en SD a leer.
-    String _nodeId;          // ID del nodo formateado para el campo JSON.
-    size_t _fileSize;        // Tamaño original del archivo binario.
-    size_t _base64Size;      // Tamaño resultante calculado de la sección Base64.
-    String _prefix;          // Estructura JSON inicial: {"node_id":"NODE_X","image_original_base64":"
-    String _suffix;          // Cierre del JSON: "}
-    size_t _totalSize;       // Tamaño total de la carga a reportar a HTTP (Content-Length).
-    size_t _position;        // Posición actual leída del stream general.
+    File _file;              ///< Archivo binario JPG de origen
+    String _nodeId;          ///< Identificador formateado del nodo sensor
+    size_t _fileSize;        ///< Tamaño real de la imagen en disco
+    size_t _base64Size;      ///< Tamaño esperado resultante del cuerpo Base64
+    String _prefix;          ///< Cabecera JSON: {"node_id":"...","image_original_base64":"
+    String _suffix;          ///< Cierre JSON: "}
+    size_t _totalSize;       ///< Tamaño total de la carga HTTP (Content-Length)
+    size_t _position;        ///< Posición de lectura del Stream virtual
     
-    // Búfer intermedio para evitar lecturas lentas byte a byte de la SD
-    uint8_t _sdBuf[512];     
-    int _sdBufLen;           
-    int _sdBufPos;           
+    uint8_t _sdBuf[512];     ///< Búfer intermedio para lecturas eficientes de la SD
+    int _sdBufLen;           ///< Datos válidos en el búfer de SD
+    int _sdBufPos;           ///< Posición del cursor en el búfer de SD
 
-    uint8_t _buf[3];         // Búfer temporal de 3 bytes binarios para la codificación Base64.
-    int _bufLen;             
-    char _b64[4];            // Bloque codificado de 4 caracteres Base64 resultantes.
-    int _b64Pos;             
+    uint8_t _buf[3];         ///< Almacenamiento temporal binario de 3 bytes para convertir a Base64
+    int _bufLen;             ///< Longitud útil actual de _buf (1 a 3)
+    char _b64[4];            ///< Salida codificada de 4 caracteres Base64
+    int _b64Pos;             ///< Posición de lectura del bloque de caracteres Base64
     const char* _base64_table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     /**
-     * @brief Lee un único byte del búfer interno de la tarjeta SD. Si el búfer está vacío,
-     * lee un nuevo bloque de 512 bytes desde el disco.
-     * @return El byte leído o -1 si llegó al fin del archivo.
+     * @brief Lee un solo byte del búfer de la SD. Si está agotado, lee un nuevo bloque de 512 bytes.
+     * @return Byte leído, o -1 si se llegó al fin de archivo.
      */
     int readSDByte() {
         if (_sdBufPos >= _sdBufLen) {
@@ -150,8 +156,7 @@ private:
     }
 
     /**
-     * @brief Codifica los 3 bytes binarios en _buf a 4 caracteres de texto Base64
-     * y los almacena en el búfer _b64.
+     * @brief Convierte 3 bytes binarios del búfer a 4 caracteres de texto Base64.
      */
     void encodeBlock() {
         _b64[0] = _base64_table[_buf[0] >> 2];
@@ -163,19 +168,19 @@ private:
 
 public:
     /**
-     * @brief Constructor del Stream de Imagen en Base64.
-     * @param file Archivo abierto en modo lectura en SD.
-     * @param nodeId ID formateado del nodo de origen.
+     * @brief Constructor del Stream.
+     * @param file Archivo abierto para lectura.
+     * @param nodeId ID del nodo que generó la foto.
      */
     ImagePayloadStream(File file, String nodeId) : _file(file), _nodeId(nodeId) {
         _prefix = "{\"node_id\":\"" + _nodeId + "\",\"image_original_base64\":\"";
         _suffix = "\"}";
         _fileSize = _file.size();
-        _base64Size = ((_fileSize + 2) / 3) * 4; // Cálculo de la longitud final matemática de Base64
+        _base64Size = ((_fileSize + 2) / 3) * 4; 
         _totalSize = _prefix.length() + _base64Size + _suffix.length();
         _position = 0;
         _bufLen = 0;
-        _b64Pos = 4; // Forzar codificación inicial del primer bloque
+        _b64Pos = 4; ///< Forzar codificación del bloque inicial
         _sdBufLen = 0;
         _sdBufPos = 0;
     }
@@ -184,18 +189,17 @@ public:
     int available() override { return _totalSize - _position; }
 
     /**
-     * @brief Proporciona secuencialmente cada carácter del stream bajo demanda del motor de red HTTP.
-     * @return El byte/carácter leído del JSON virtual en Base64, o -1 al finalizar.
+     * @brief Proporciona dinámicamente cada carácter del payload HTTP.
      */
     int read() override {
         if (_position >= _totalSize) return -1;
         int b = -1;
         
-        // Etapa 1: Inyectar la cabecera JSON
+        // Cabecera JSON
         if (_position < _prefix.length()) {
             b = _prefix[_position];
         } 
-        // Etapa 2: Codificar y proveer el cuerpo en Base64 dinámicamente
+        // Conversión y entrega Base64
         else if (_position < _prefix.length() + _base64Size) {
             if (_b64Pos >= 4) {
                 _bufLen = 0;
@@ -208,7 +212,7 @@ public:
             }
             if (_b64Pos < 4) b = _b64[_b64Pos++];
         } 
-        // Etapa 3: Inyectar el cierre JSON
+        // Cierre JSON
         else {
             size_t suffixPos = _position - (_prefix.length() + _base64Size);
             if (suffixPos < _suffix.length()) b = _suffix[suffixPos];
@@ -218,7 +222,7 @@ public:
     }
 
     /**
-     * @brief Optimización para lecturas por bloques por parte de HTTPClient.
+     * @brief Optimización de lectura en bloque para HTTPClient.
      */
     size_t readBytes(uint8_t *buffer, size_t length) override {
         size_t count = 0;
@@ -239,8 +243,7 @@ public:
 };
 
 /**
- * @brief Retardo inteligente que procesa y decodifica las ráfagas GPS en segundo plano.
- * @param ms Tiempo en milisegundos.
+ * @brief Retardo inteligente para procesamiento del decodificador GPS.
  */
 static void smartDelay(unsigned long ms) {
   unsigned long start = millis();
@@ -252,8 +255,7 @@ static void smartDelay(unsigned long ms) {
 }
 
 /**
- * @brief Dibuja la barra de título premium del concentrador.
- * @param title Título a renderizar.
+ * @brief Dibuja la cabecera azul marino del dashboard.
  */
 void drawHeader(const char* title) {
     tft.fillRect(0, 0, 160, 15, tft.color565(0, 51, 102)); 
@@ -265,19 +267,19 @@ void drawHeader(const char* title) {
 }
 
 /**
- * @brief Configuración inicial del concentrador.
+ * @brief Configuración del sistema de hardware y enlace inalámbrico.
  */
 void setup() {
   Serial.begin(115200);
   
-  // Encendido de sistemas de alimentación regulados de la placa
+  // Encendido físico de periféricos
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, HIGH);
   pinMode(BACKLIGHT_PIN, OUTPUT);
   digitalWrite(BACKLIGHT_PIN, HIGH);
   delay(100);
 
-  // Inicialización de la Pantalla TFT
+  // Inicializar pantalla TFT
   tft.init();
   tft.setRotation(3);
   tft.fillScreen(TFT_BLACK);
@@ -286,10 +288,10 @@ void setup() {
   tft.setCursor(0, 0);
   tft.println("Concentrador Init...");
 
-  // GPS
+  // Inicializar receptor GPS
   Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
 
-  // Iniciar bus SPI dedicado a LoRa SX1262
+  // Iniciar bus SPI dedicado y transceptor LoRa
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   Serial.println("Iniciando transceptor LoRa SX1262 del Concentrador...");
   tft.println("Iniciando LoRa...");
@@ -318,27 +320,26 @@ void setup() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
   // --- TARJETA SD: CONFIGURACIÓN POR BUS SPI ALTERNATIVO HSPI ---
-  // Se instancia dinámicamente con `new` dentro de `setup()` para prevenir interferencias
-  // con la configuración inicial de pantalla del bootloader, eliminando el bootloop de hardware.
+  // Se instancia dinámicamente para prevenir interferencias con la pantalla durante el arranque
   tft.setTextSize(1);
   spiSD = new SPIClass(HSPI);
   spiSD->begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   
   if (!SD.begin(SD_CS, *spiSD)) {
-    Serial.println("Fallo al montar SD!");
+    Serial.println("[ERROR] Fallo al montar la tarjeta SD!");
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.println("Error: SD Card!");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     sdMounted = false;
   } else {
-    Serial.println("SD Inicializada.");
+    Serial.println("[INFO] Tarjeta SD inicializada correctamente.");
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("SD OK!");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     sdMounted = true;
   }
 
-  // Configuración de enlace WiFi
+  // Conexión WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   tft.print("Conectando WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -346,11 +347,10 @@ void setup() {
     tft.print(".");
   }
   
-  // Renderizado del Dashboard estático
+  // Dashboard Estático
   tft.fillScreen(TFT_BLACK);
   drawHeader("MONICA CONCENTRADOR");
   
-  // Mostrar estado de la SD y conexión (Y = 18)
   tft.setCursor(0, 18);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.print("SD: ");
@@ -367,25 +367,21 @@ void setup() {
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.print("OK");
   
-  // Mostrar IP local obtenida por DHCP (Y = 28)
   tft.setCursor(0, 28);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.print("IP: ");
   tft.print(WiFi.localIP());
   
-  // Separadores fijos de la interfaz premium anti-solapamiento
   tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
   tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
 
-  // Poner el transceptor en modo recepción continua en segundo plano
+  // Entrar en modo escucha de LoRa
   radio.startReceive();
   Serial.println("Concentrador listo y escuchando por LoRa...");
 }
 
 /**
- * @brief Formatea la telemetría recibida a JSON y la envía por HTTP POST a la API final.
- * @param srcId Nodo emisor de origen.
- * @param sp Puntero al bloque estructurado de lecturas en RAM.
+ * @brief Envía lecturas de telemetría a la API ambiental en formato JSON.
  */
 void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -407,7 +403,7 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
   String jsonOutput;
   serializeJson(doc, jsonOutput);
 
-  http.setTimeout(15000); // 15s de gracia
+  http.setTimeout(15000); 
   http.begin(API_URL);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-api-key", API_KEY);
@@ -433,19 +429,14 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
 }
 
 /**
- * @brief Administrador y procesador del flujo de imágenes LoRa por fragmentos.
- * @param packet Puntero al paquete LoRa recibido.
- * @param payloadLen Longitud neta del payload.
+ * @brief Gestiona el flujo de reensamblado e integridad de imágenes recibidas por fragmentos.
  * 
- * Lógica ARQ / NACK Selectivo:
- *  1. Al recibir DATA_IMG_START: Abre/recrea un archivo físico en la SD y reserva un bitmap dinámico
- *     de 2048 booleanos en RAM para controlar qué fragmentos han sido escritos. Pre-asigna espacio físico
- *     en disco para evitar retardos de asignación en tiempo de escritura.
- *  2. Al recibir DATA_IMG_CHUNK: Escribe el payload en el offset exacto `(seq - 1) * LORA_MAX_PAYLOAD` 
- *     en la SD y marca el bitmap.
- *  3. Al recibir DATA_IMG_END: Recorre el bitmap para identificar si faltan bloques.
- *     - Si faltan: Envía CMD_REQ_MISSING con la lista de índices perdidos (NACK).
- *     - Si está completo: Cierra el archivo y ejecuta una subida robusta a la API de Inteligencia Artificial.
+ * Lógica ARQ (Confirmación Selectiva):
+ *  1. DATA_IMG_START: Borra archivos antiguos, reserva el bitmap de fragmentos en RAM
+ *     y abre el archivo JPG en SD pre-asignando su tamaño total para optimizar la escritura SPI.
+ *  2. DATA_IMG_CHUNK: Escribe el fragmento en la ubicación de disco exacta `(seq-1) * 232` y marca el bitmap.
+ *  3. DATA_IMG_END: Revisa si hay fragmentos perdidos. Si los hay, responde enviando una lista
+ *     de fragmentos faltantes (`CMD_REQ_MISSING`). Si no los hay, cierra el archivo y lo envía a la API.
  */
 void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
     String filename = String("/img_node_") + packet->header.srcId + ".jpg";
@@ -454,7 +445,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
     tft.setCursor(0, 53);
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     
-    // --- LOTE INICIAL DE TRANSMISIÓN ---
+    // --- INICIO DE TRANSMISIÓN DE FOTO ---
     if (packet->header.type == DATA_IMG_START) {
         lastChunkReceivedTime = millis();
         if (isFileActive) {
@@ -472,7 +463,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             Serial.println("LoRa RX: DATA_IMG_START recibido (sin payload de tamaño)");
         }
 
-        // Alojar dinámicamente el bitmap de control en RAM (límite base de 2048 fragmentos, ~409KB)
+        // Alojar bitmap dinámico de control de fragmentos recibidos (máx 2048 chunks)
         if (chunkReceived != NULL) {
             free(chunkReceived);
             chunkReceived = NULL;
@@ -484,11 +475,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             SD.remove(filename);
         }
         
-        // Abrir archivo en SD para escritura rápida
         activeFile = SD.open(filename, FILE_WRITE);
         if (activeFile) {
             isFileActive = true;
-            // Pre-asignar espacio contiguo en disco para optimizar velocidad de bus SPI
+            // Pre-asignar espacio contiguo para optimizar velocidad del bus SPI al escribir
             if (imgSize > 0) {
                 activeFile.seek(imgSize - 1);
                 activeFile.write(0);
@@ -501,12 +491,12 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         }
         tft.print("Recibiendo Foto...");
     } 
-    // --- LOTE DE FRAGMENTOS ---
+    // --- RECIBIR FRAGMENTO ---
     else if (packet->header.type == DATA_IMG_CHUNK) {
         uint16_t seq = packet->header.seqNum;
         lastChunkReceivedTime = millis();
         
-        // Inicialización de resguardo si se perdió el START inicial por interferencias
+        // Inicialización de emergencia por si se perdió el paquete de inicio
         if (!isFileActive) {
             Serial.printf("LoRa RX: DATA_IMG_CHUNK seq %d recibido sin START. Inicializando sesión de emergencia...\n", seq);
             if (chunkReceived != NULL) {
@@ -523,17 +513,16 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             activeFile = SD.open(filename, FILE_WRITE);
             if (activeFile) {
                 isFileActive = true;
-                Serial.println("SD: Archivo abierto dinámicamente en modo de emergencia.");
             }
         }
 
-        // Descartar de forma segura fragmentos duplicados por retransmisiones tardías
+        // Ignorar duplicados
         if (chunkReceived != NULL && seq < 2048 && chunkReceived[seq]) {
             Serial.printf("LoRa RX: Descartando chunk duplicado seq %d (ya recibido)\n", seq);
             return;
         }
 
-        // Escribir el fragmento en la dirección de disco física exacta del archivo
+        // Escribir el fragmento en la ubicación de disco exacta (offset)
         if (isFileActive && payloadLen > 0) {
             uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
             activeFile.seek(offset);
@@ -555,26 +544,26 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             tft.printf("%u / %u Chunks", (uint32_t)seq, totalChunks);
         }
     }
-    // --- LOTE DE CONFIRMACIÓN Y CIERRE ---
+    // --- FIN DE LA IMAGEN ---
     else if (packet->header.type == DATA_IMG_END) {
         lastChunkReceivedTime = millis();
         Serial.println("LoRa RX: DATA_IMG_END recibido. Verificando integridad de chunks...");
 
-        // Caso excepcional: El nodo retransmite el END porque el ACK final en el aire se perdió
+        // Sesión fantasma (ACK duplicado en el aire)
         if (expectedSeqNum == 0) {
             Serial.println("LoRa RX: DATA_IMG_END recibido fuera de sesión activa. Re-enviando ACK final...");
             LoRaPacket ackPacket;
             memset(&ackPacket, 0, sizeof(LoRaHeader));
             ackPacket.header.syncWord[0] = LORA_SYNC_0;
             ackPacket.header.syncWord[1] = LORA_SYNC_1;
-            ackPacket.header.srcId = MY_NODE_ID; // 0
+            ackPacket.header.srcId = MY_NODE_ID; 
             ackPacket.header.destId = packet->header.srcId;
-            ackPacket.header.nextHopId = 1; // Primer salto es siempre el Nodo 1
+            ackPacket.header.nextHopId = 1; 
             ackPacket.header.type = ACK;
             ackPacket.header.seqNum = packetSequence++;
             ackPacket.header.ttl = 5;
             
-            delay(80); // Margen para batería
+            delay(80); 
             radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
             radio.startReceive();
             return;
@@ -593,7 +582,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             }
         }
 
-        // Escanear el bitmap buscando fragmentos perdidos
+        // Buscar fragmentos ausentes en el bitmap
         uint16_t missingCount = 0;
         uint16_t firstMissing[98]; 
         
@@ -609,7 +598,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             }
         }
 
-        // --- PROTOCOLO ARQ: SOLICITUD NACK DE RE-TRANSMISIÓN ---
+        // Solicitar retransmisión (NACK) si faltan fragmentos
         if (missingCount > 0) {
             Serial.printf("LoRa Integrity: ¡Perdidos %u chunks! Enviando petición de retransmisión CMD_REQ_MISSING...\n", missingCount);
             
@@ -632,13 +621,13 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             memcpy(nackPacket.payload, &missingCount, 2);
             memcpy(nackPacket.payload + 2, firstMissing, missingCount * 2);
             
-            delay(80); // Margen para transceptor receptor
+            delay(80); 
             radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
             radio.startReceive();
             return;
         }
 
-        // --- ÉXITO DE INTEGRIDAD: 100% REENSAMBLADO ---
+        // Éxito: 100% de la imagen reensamblada correctamente
         Serial.println("LoRa Integrity: ¡100% de fragmentos recibidos con éxito! Enviando ACK final...");
         
         tft.fillRect(0, 53, 160, 10, TFT_BLACK);
@@ -646,7 +635,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         tft.setTextColor(TFT_GREEN, TFT_BLACK);
         tft.print("Reensamblado OK!");
 
-        // Responder confirmación final
+        // Responder confirmación final de recepción
         LoRaPacket ackPacket;
         memset(&ackPacket, 0, sizeof(LoRaHeader));
         ackPacket.header.syncWord[0] = LORA_SYNC_0;
@@ -669,14 +658,13 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             chunkReceived = NULL;
         }
 
-        // Guardar y consolidar archivo físico en la SD
         if (isFileActive) {
             activeFile.close();
             isFileActive = false;
             Serial.println("Archivo de imagen consolidado y cerrado en SD con éxito.");
         }
         
-        // --- ENVÍO HTTP POST ROBUESTO A LA API DE IA (3 INTENTOS) ---
+        // --- SUBIDA HTTP POST CON RETRIES A LA API DE INTELIGENCIA ARTIFICIAL ---
         int attempts = 3;
         int httpResponseCode = -1;
         
@@ -695,18 +683,18 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 tft.setTextColor(TFT_YELLOW, TFT_BLACK);
                 tft.printf("Subiendo %d/%d...", attempt, attempts);
                 
-                // Inicializar flujo de codificación en Base64 en caliente
+                // Formatear payload de streaming Base64 en caliente
                 char imgNodeFormatted[20];
                 sprintf(imgNodeFormatted, "NODE_%03d", packet->header.srcId);
                 ImagePayloadStream payloadStream(imgFile, String(imgNodeFormatted));
                 
                 HTTPClient http;
-                http.setTimeout(60000); // 60 segundos (permite inferencias lentas de IA en CPU remota)
+                http.setTimeout(60000); ///< 60 segundos por si el servidor ejecuta inferencia pesada en CPU
                 http.begin(AI_API_URL);
                 http.addHeader("Content-Type", "application/json");
                 http.addHeader("x-api-key", API_KEY);
                 
-                // Enviar petición HTTP POST inyectando el Stream dinámico
+                // Enviar usando el puntero a la clase Stream personalizada
                 httpResponseCode = http.sendRequest("POST", &payloadStream, payloadStream.getTotalSize());
                 Serial.printf("Intento %d completado. Código HTTP: %d\n", attempt, httpResponseCode);
                 
@@ -718,7 +706,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                     tft.setCursor(0, 60);
                     tft.setTextColor(TFT_GREEN, TFT_BLACK);
                     tft.println("Foto API OK!");
-                    break; // Subida completada
+                    break;
                 } else {
                     tft.fillRect(0, 60, 160, 20, TFT_BLACK);
                     tft.setCursor(0, 60);
@@ -735,14 +723,12 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             }
         }
         
-        lastPollTime = millis(); // Reset de temporizador de polling
+        lastPollTime = millis(); 
     }
 }
 
 /**
- * @brief Transmite una petición de comando LoRa estructurado a un nodo sensor remoto.
- * @param nodeToPoll Nodo a interrogar.
- * @param cmd Tipo de comando (solicitud de telemetría o imagen).
+ * @brief Envía comando LoRa para interrogar a un nodo sensor.
  */
 void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     LoRaPacket packet;
@@ -751,9 +737,7 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     packet.header.syncWord[1] = LORA_SYNC_1;
     packet.header.srcId = MY_NODE_ID; 
     packet.header.destId = nodeToPoll;
-    
-    // Ruteo Lineal: El concentrador (0) siempre tiene como salto físico inicial al Nodo 1 directo.
-    packet.header.nextHopId = 1; 
+    packet.header.nextHopId = 1; ///< Enrutamiento lineal: concentrador siempre salta al Nodo 1
     packet.header.type = cmd;
     packet.header.seqNum = packetSequence++;
     packet.header.ttl = 5;
@@ -770,7 +754,7 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
 }
 
 /**
- * @brief Gestiona la escucha e interpretación del tráfico LoRa entrante para el Concentrador.
+ * @brief Gestiona la lectura e interpretación de datos recibidos a través de LoRa.
  */
 void handleLoRa() {
     if (digitalRead(LORA_DIO1)) { 
@@ -780,7 +764,7 @@ void handleLoRa() {
         if (state == RADIOLIB_ERR_NONE) {
             if (packet.header.syncWord[0] == LORA_SYNC_0 && packet.header.syncWord[1] == LORA_SYNC_1) {
                 
-                // Filtro de salto físico crítico
+                // Ignorar si no va dirigido a este nodo físico como el siguiente salto
                 if (packet.header.nextHopId != MY_NODE_ID) {
                     radio.startReceive();
                     return;
@@ -792,7 +776,7 @@ void handleLoRa() {
                     size_t packetLen = radio.getPacketLength();
                     size_t payloadLen = packetLen - sizeof(LoRaHeader);
 
-                    // Procesar telemetría ambiental
+                    // Telemetría ambiental
                     if (packet.header.type == DATA_TELEMETRY) {
                         tft.fillRect(0, 42, 160, 10, TFT_BLACK);
                         tft.setCursor(0, 42);
@@ -803,10 +787,10 @@ void handleLoRa() {
                         forwardSensorData(packet.header.srcId, sp);
                         
                         if (packet.header.srcId == targetNode && !pollForImage) {
-                            responseReceived = true; // Liberar máquina de estados de polling
+                            responseReceived = true; 
                         }
                     }
-                    // Procesar fragmentos de cámara JPG
+                    // Fragmento de imagen
                     else if (packet.header.type >= DATA_IMG_START && packet.header.type <= DATA_IMG_END) {
                         if(packet.header.type == DATA_IMG_START) {
                            tft.fillRect(0, 42, 160, 10, TFT_BLACK);
@@ -815,12 +799,12 @@ void handleLoRa() {
                            tft.printf("RX: IMG (%d)", packet.header.srcId);
                            
                            if (packet.header.srcId == targetNode && pollForImage) {
-                               responseReceived = true; // Liberar máquina de estados de polling
+                                responseReceived = true; 
                            }
                         }
                         handleImageFragment(&packet, payloadLen);
                     }
-                    // Procesar confirmaciones (ACK) de disparo de cámara
+                    // ACK de toma de foto exitosa
                     else if (packet.header.type == ACK) {
                         tft.fillRect(0, 42, 160, 10, TFT_BLACK);
                         tft.setCursor(0, 42);
@@ -828,7 +812,7 @@ void handleLoRa() {
                         tft.printf("ACK Nodo %d", packet.header.srcId);
                         
                         if (packet.header.srcId == targetNode && pollForImage) {
-                            responseReceived = true; // Liberar máquina de estados de polling
+                            responseReceived = true; 
                         }
                     }
                 }
@@ -837,14 +821,10 @@ void handleLoRa() {
         radio.startReceive(); 
     }
 }
+
 /**
- * @brief Escucha y procesa comandos manuales ingresados por el puerto serie USB.
- * 
- * Permite al usuario forzar el muestreo de un nodo y tipo de dato específico desde su PC.
- * Formato del comando esperado: "POLL <nodo> <tipo>"
- *   - <nodo>: ID de nodo (1 al 4).
- *   - <tipo>: 'T' para telemetría, 'I' para disparar cámara y obtener imagen.
- *   Ejemplo: "POLL 2 T" o "POLL 4 I"
+ * @brief Escucha y procesa solicitudes manuales enviadas a través del monitor serie del puerto USB.
+ * Comando esperado: "POLL <nodo> <tipo>" (Ej: "POLL 2 T")
  */
 void handleSerial() {
   if (Serial.available()) {
@@ -853,11 +833,11 @@ void handleSerial() {
     
     if (cmdStr.startsWith("POLL")) {
       if (expectedSeqNum > 0) {
-        Serial.println("[ERROR MANUAL] Recepción de imagen en progreso. Comando omitido.");
+        Serial.println("[ERROR] Recepción de imagen en progreso. Comando ignorado.");
         return;
       }
       if (pollState != POLL_STATE_IDLE) {
-        Serial.println("[ERROR MANUAL] Concentrador ocupado esperando respuesta de red. Comando omitido.");
+        Serial.println("[ERROR] Concentrador ocupado esperando red. Comando ignorado.");
         return;
       }
       
@@ -885,25 +865,25 @@ void handleSerial() {
             Serial.printf("[MANUAL] Iniciando sondeo forzado: Nodo %d, Tipo %s\n", targetNode, pollForImage ? "IMAGEN" : "TELEMETRIA");
             pollNode(targetNode, cmd);
           } else {
-            Serial.println("[ERROR MANUAL] Tipo de dato inválido. Use 'T' para telemetría o 'I' para imagen.");
+            Serial.println("[ERROR] Tipo inválido. Use 'T' para telemetría o 'I' para imagen.");
           }
         } else {
-          Serial.println("[ERROR MANUAL] ID de nodo inválido. Rango permitido: 1 a 4.");
+          Serial.println("[ERROR] Nodo inválido (Rango esperado: 1 a 4).");
         }
       } else {
-        Serial.println("[ERROR MANUAL] Formato de comando incorrecto. Use: POLL <nodo> <tipo> (Ej: POLL 2 T)");
+        Serial.println("[ERROR] Formato incorrecto. Formato: POLL <nodo> <tipo> (Ej: POLL 2 T)");
       }
     }
   }
 }
 
 /**
- * @brief Loop de ejecución principal y control de máquinas de estado del Concentrador.
+ * @brief Bucle principal de ejecución del concentrador.
  */
 void loop() {
   static unsigned long lastHeartbeat = 0;
   
-  // Latido local cada 5 segundos
+  // Heartbeat local de estado en consola cada 5 segundos
   if (millis() - lastHeartbeat > 5000) {
     Serial.println("[HEARTBEAT] Concentrador ejecutando loop...");
     lastHeartbeat = millis();
@@ -913,11 +893,9 @@ void loop() {
   handleLoRa();
   handleSerial();
   
-  // --- CONTROL DE SEGURIDAD (TIMEOUT) PARA SESIÓN DE IMAGEN ---
-  // Si la transmisión de una foto queda colgada por más de 60 segundos (p. ej., porque se apagó
-  // el nodo emisor o perdió energía), abortar y liberar recursos de RAM de forma limpia.
+  // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
   if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
-      Serial.println("[TIMEOUT] No se recibieron chunks de imagen por 60s. Cancelando sesión de forma segura.");
+      Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 60s.");
       if (isFileActive) {
           activeFile.close();
           isFileActive = false;
@@ -927,7 +905,7 @@ void loop() {
           free(chunkReceived);
           chunkReceived = NULL;
       }
-      lastPollTime = millis(); // Reset de retardo de muestreo
+      lastPollTime = millis(); 
       
       tft.fillRect(0, 53, 160, 10, TFT_BLACK);
       tft.setCursor(0, 53);
@@ -935,33 +913,18 @@ void loop() {
       tft.print("Img Timeout!");
   }
   
-  // --- MÁQUINA DE ESTADOS DE POLLING DE BAJO TIEMPO DE RESPUESTA CON 3 INTENTOS ---
-  // Solo iniciar un nuevo muestreo si no nos encontramos en medio de una recepción activa de imagen
+  // --- CONTROL DE MÁQUINA DE ESTADOS DE POLLING ---
   if (expectedSeqNum == 0) {
-      // Estado de espera completado: iniciar un nuevo muestreo (DESACTIVADO: ahora es 100% manual por puerto serie)
       if (pollState == POLL_STATE_IDLE) {
-          /*
-          if (millis() - lastPollTime > pollInterval) {
-              responseReceived = false;
-              currentAttempt = 1;
-              requestSentTime = millis();
-              currentTimeout = pollForImage ? 6000 : 3500; // Timeout dinámico
-              pollState = POLL_STATE_WAITING_RESPONSE;
-              
-              PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
-              pollNode(targetNode, cmd);
-          }
-          */
+          // El polling automático está desactivado por defecto (se realiza de forma manual vía puerto serie)
       }
-      // Estado en espera de respuesta: evaluar timeouts e intentos
       else if (pollState == POLL_STATE_WAITING_RESPONSE) {
           if (responseReceived) {
               Serial.printf("LoRa Flow: Respuesta exitosa recibida del Nodo %d en intento %d.\n", targetNode, currentAttempt);
               
-              // Alternar la lógica de muestreo
               if (pollForImage) {
                   targetNode++;
-                  if (targetNode > 4) targetNode = 1; // Regresar al Nodo 1 tras culminar Nodo 4
+                  if (targetNode > 4) targetNode = 1; 
                   pollForImage = false;
               } else {
                   pollForImage = true;
@@ -970,7 +933,7 @@ void loop() {
               pollState = POLL_STATE_IDLE;
               lastPollTime = millis();
           }
-          // Timeout detectado en el intento actual
+          // Si expira el tiempo de respuesta, reintentar (máximo 3 veces)
           else if (millis() - requestSentTime > currentTimeout) {
               if (currentAttempt < 3) {
                   currentAttempt++;
@@ -986,7 +949,7 @@ void loop() {
                   
                   requestSentTime = millis();
               } else {
-                  // Fallo total tras 3 intentos: saltar al siguiente nodo para no colgar el polling
+                  // Fallar y saltar al siguiente nodo tras agotar intentos
                   Serial.printf("LoRa Flow: [FALLO] Sin respuesta del Nodo %d tras 3 intentos. Pasando al siguiente.\n", targetNode);
                   
                   tft.fillRect(0, 65, 160, 12, TFT_BLACK);
