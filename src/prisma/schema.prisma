@@ -79,3 +79,29 @@ model WasteDetection {
 
   @@map("waste_detections")
 }
+
+/// Modelo de Log de Red
+/// Registra eventos operativos, advertencias y errores del concentrador remoto.
+model NetworkLog {
+  log_id    Int      @id @default(autoincrement())
+  timestamp DateTime @default(now()) @db.Timestamp(6)
+  level     String   @db.VarChar(20) // 'INFO', 'WARNING', 'ERROR', 'SUCCESS'
+  message   String   @db.Text
+  node_id   String?  @db.VarChar(20)
+
+  @@map("network_logs")
+}
+
+/// Modelo de Comando de Red
+/// Almacena las solicitudes de comando enviadas desde la interfaz web para el concentrador.
+model NetworkCommand {
+  command_id     Int      @id @default(autoincrement())
+  timestamp      DateTime @default(now()) @db.Timestamp(6)
+  type           String   @db.VarChar(50) // 'POLL_TELEMETRY', 'POLL_IMAGE', 'PING'
+  target_node_id String   @db.VarChar(20)
+  parameters     String?  @db.Text        // JSON stringificado para parámetros futuros
+  status         String   @db.VarChar(20) // 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'
+  response       String?  @db.Text        // Diagnóstico o respuesta de ejecución
+
+  @@map("network_commands")
+}

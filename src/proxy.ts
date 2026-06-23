@@ -9,16 +9,35 @@ export default withAuth(
 
         console.log(`Middleware: ${method} ${path} - User Role: ${token?.role || 'Guest'}`);
 
-        // 0. BYPASS TOTAL para peticiones de Hardware/Script (POST a endpoints de datos)
+        // 0. BYPASS TOTAL para peticiones de Hardware/Script (POST a endpoints de datos o cualquier petición con API Key)
+        const hasHardwareApiKey = req.headers.get('x-api-key') !== null;
         if (
-            (path.startsWith("/api/sensor-readings") || path.startsWith("/api/waste-detections")) && 
-            method === "POST"
+            ((path.startsWith("/api/sensor-readings") || path.startsWith("/api/waste-detections")) && method === "POST") ||
+            (path.startsWith("/api/network") && hasHardwareApiKey)
         ) {
-            console.log("Middleware: Bypass detectado para Hardware POST");
+            console.log("Middleware: Bypass detectado para Hardware");
             return NextResponse.next();
         }
 
         const isModification = method === "POST" || method === "PUT" || method === "DELETE";
+
+        // Protección para endpoints de Red/Comandos
+        if (path.startsWith("/api/network")) {
+            if (!token) {
+                return new NextResponse(
+                    JSON.stringify({ error: "Unauthorized" }),
+                    { status: 401, headers: { "content-type": "application/json" } }
+                );
+            }
+            if (isModification) {
+                if (token.role !== "admin" && token.role !== "super") {
+                    return new NextResponse(
+                        JSON.stringify({ error: "Forbidden: Admin or Super role required" }),
+                        { status: 403, headers: { "content-type": "application/json" } }
+                    );
+                }
+            }
+        }
 
         // Protección estricta para el endpoint de usuarios (/api/users)
         if (path.startsWith("/api/users")) {
@@ -87,6 +106,7 @@ export const config = {
         "/api/nodes/:path*",
         "/api/sensor-readings/:path*",
         "/api/readings/:path*",
-        "/api/waste-detections/:path*"
+        "/api/waste-detections/:path*",
+        "/api/network/:path*"
     ],
 };
