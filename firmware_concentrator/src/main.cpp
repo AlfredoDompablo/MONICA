@@ -1101,6 +1101,7 @@ void checkPendingCommands() {
             int resVal = 10;
             int brVal = 0;
             int coVal = 1;
+            int qtyVal = 24; // default balanceado
             
             if (paramStr != "null" && paramStr.length() > 0) {
                 DynamicJsonDocument paramDoc(200);
@@ -1109,6 +1110,7 @@ void checkPendingCommands() {
                     resVal = paramDoc["resolution"] | 10;
                     brVal = paramDoc["brightness"] | 0;
                     coVal = paramDoc["contrast"] | 1;
+                    qtyVal = paramDoc["quality"] | 24;
                 }
             }
             
@@ -1127,6 +1129,7 @@ void checkPendingCommands() {
             ccp->resolution = resVal;
             ccp->brightness = brVal;
             ccp->contrast = coVal;
+            ccp->quality = qtyVal;
             
             responseReceived = false;
             targetNode = nodeNum;

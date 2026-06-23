@@ -324,31 +324,36 @@ void loop() {
       delay(500);
       updateMenu();
     }
-    // Comando: SET_CONFIG <res> <br> <co>
+    // Comando: SET_CONFIG <res> <br> <co> <quality>
     else if (cmd.startsWith("SET_CONFIG")) {
       int firstSpace = cmd.indexOf(' ');
       int secondSpace = cmd.indexOf(' ', firstSpace + 1);
       int thirdSpace = cmd.indexOf(' ', secondSpace + 1);
+      int fourthSpace = cmd.indexOf(' ', thirdSpace + 1);
       if (firstSpace != -1 && secondSpace != -1 && thirdSpace != -1) {
         int res = cmd.substring(firstSpace + 1, secondSpace).toInt();
         int br = cmd.substring(secondSpace + 1, thirdSpace).toInt();
-        int co = cmd.substring(thirdSpace + 1).toInt();
+        int co = (fourthSpace != -1) ? cmd.substring(thirdSpace + 1, fourthSpace).toInt() : cmd.substring(thirdSpace + 1).toInt();
+        int qty = (fourthSpace != -1) ? cmd.substring(fourthSpace + 1).toInt() : 14;
         
         res = constrain(res, 0, 21);
         br = constrain(br, -2, 2);
         co = constrain(co, -2, 2);
+        qty = constrain(qty, 10, 63);
         
         menu[0].currentVal = res;
         menu[1].currentVal = br;
         menu[2].currentVal = co;
+        // La calidad no se muestra directamente en el menú de 3 filas iniciales pero se aplica
         
         if (s) {
           s->set_framesize(s, (framesize_t)res);
           s->set_brightness(s, br);
           s->set_contrast(s, co);
+          s->set_quality(s, qty);
         }
         
-        Serial.printf("[CAMERA] Configurada remotamente: Res=%d, Br=%d, Co=%d\n", res, br, co);
+        Serial.printf("[CAMERA] Configurada remotamente: Res=%d, Br=%d, Co=%d, Qty=%d\n", res, br, co, qty);
         heltecSerial.println("CONF_ACK");
       }
     }

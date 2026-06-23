@@ -28,6 +28,7 @@ Preferences preferences;
 uint8_t cam_resolution = 10; // XGA por defecto
 int8_t cam_brightness = 0;   // -2 a 2
 int8_t cam_contrast = 1;     // -2 a 2
+uint8_t cam_quality = 24;    // Calidad JPEG (10-63, default balanceado)
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
@@ -207,8 +208,9 @@ void setup() {
   cam_resolution = preferences.getUChar("res", 10); // XGA por defecto
   cam_brightness = preferences.getChar("br", 0);
   cam_contrast = preferences.getChar("co", 1);
+  cam_quality = preferences.getUChar("qty", 24);
   preferences.end();
-  Serial.printf("[CONFIG] Cámara cargada de Preferences: Res=%d, Br=%d, Co=%d\n", cam_resolution, cam_brightness, cam_contrast);
+  Serial.printf("[CONFIG] Cámara cargada de Preferences: Res=%d, Br=%d, Co=%d, Qty=%d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
 
   // Inicializar LittleFS en la memoria Flash externa para almacenamiento temporal
   if (!LittleFS.begin(true)) {
@@ -479,8 +481,8 @@ void requestAndSendImage(uint8_t destId) {
   while(camSerial.available()) camSerial.read(); // Limpiar remanentes serie
   
   // Enviar configuración a la cámara vía serial
-  Serial.printf("[CAMERA] Enviando configuración UART: Res=%d, Br=%d, Co=%d\n", cam_resolution, cam_brightness, cam_contrast);
-  camSerial.printf("SET_CONFIG %d %d %d\n", cam_resolution, cam_brightness, cam_contrast);
+  Serial.printf("[CAMERA] Enviando configuración UART: Res=%d, Br=%d, Co=%d, Qty=%d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
+  camSerial.printf("SET_CONFIG %d %d %d %d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
   
   // Esperar confirmación CONF_ACK (máximo 500ms)
   unsigned long ackStart = millis();
@@ -947,16 +949,18 @@ void handleLoRa() {
                     cam_resolution = constrain(ccp->resolution, 0, 21);
                     cam_brightness = constrain(ccp->brightness, -2, 2);
                     cam_contrast = constrain(ccp->contrast, -2, 2);
+                    cam_quality = constrain(ccp->quality, 10, 63);
                     
                     // Guardar en Preferences de forma permanente
                     preferences.begin("cam_config", false);
                     preferences.putUChar("res", cam_resolution);
                     preferences.putChar("br", cam_brightness);
                     preferences.putChar("co", cam_contrast);
+                    preferences.putUChar("qty", cam_quality);
                     preferences.end();
                     
-                    Serial.printf("[CONFIG] Nueva configuración de cámara guardada: Res=%d, Br=%d, Co=%d\n", 
-                                  cam_resolution, cam_brightness, cam_contrast);
+                    Serial.printf("[CONFIG] Nueva configuración de cámara guardada: Res=%d, Br=%d, Co=%d, Qty=%d\n", 
+                                  cam_resolution, cam_brightness, cam_contrast, cam_quality);
                                   
                     // Responder con ACK de confirmación
                     LoRaPacket ackPacket;
