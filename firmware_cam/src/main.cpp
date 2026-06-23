@@ -324,6 +324,34 @@ void loop() {
       delay(500);
       updateMenu();
     }
+    // Comando: SET_CONFIG <res> <br> <co>
+    else if (cmd.startsWith("SET_CONFIG")) {
+      int firstSpace = cmd.indexOf(' ');
+      int secondSpace = cmd.indexOf(' ', firstSpace + 1);
+      int thirdSpace = cmd.indexOf(' ', secondSpace + 1);
+      if (firstSpace != -1 && secondSpace != -1 && thirdSpace != -1) {
+        int res = cmd.substring(firstSpace + 1, secondSpace).toInt();
+        int br = cmd.substring(secondSpace + 1, thirdSpace).toInt();
+        int co = cmd.substring(thirdSpace + 1).toInt();
+        
+        res = constrain(res, 0, 21);
+        br = constrain(br, -2, 2);
+        co = constrain(co, -2, 2);
+        
+        menu[0].currentVal = res;
+        menu[1].currentVal = br;
+        menu[2].currentVal = co;
+        
+        if (s) {
+          s->set_framesize(s, (framesize_t)res);
+          s->set_brightness(s, br);
+          s->set_contrast(s, co);
+        }
+        
+        Serial.printf("[CAMERA] Configurada remotamente: Res=%d, Br=%d, Co=%d\n", res, br, co);
+        heltecSerial.println("CONF_ACK");
+      }
+    }
   }
 }
 

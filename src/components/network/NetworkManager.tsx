@@ -11,7 +11,8 @@ import {
     Activity, 
     Camera, 
     Radio, 
-    Trash2 
+    Trash2,
+    Sliders
 } from 'lucide-react';
 
 interface NodeInfo {
@@ -34,6 +35,7 @@ interface NetworkCommand {
     target_node_id: string;
     status: string;
     response: string | null;
+    parameters: string | null;
 }
 
 export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
@@ -44,6 +46,11 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     const [filterLevel, setFilterLevel] = useState<string>('ALL');
     const [isSending, setIsSending] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
+
+    // Parámetros de Cámara Remota
+    const [cameraResolution, setCameraResolution] = useState<number>(10);
+    const [cameraBrightness, setCameraBrightness] = useState<number>(0);
+    const [cameraContrast, setCameraContrast] = useState<number>(1);
 
     // Cargar Logs y Comandos desde la API
     const fetchData = useCallback(async () => {
@@ -90,6 +97,11 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                 body: JSON.stringify({
                     type: commandType,
                     target_node_id: selectedNode,
+                    parameters: commandType === 'CONFIG_CAMERA' ? {
+                        resolution: cameraResolution,
+                        brightness: cameraBrightness,
+                        contrast: cameraContrast
+                    } : undefined
                 }),
             });
 
@@ -239,8 +251,80 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                         <p className="text-xs text-gray-500">Validar enlace RF</p>
                                     </div>
                                 </label>
+
+                                <label className={`flex items-center gap-3 p-4 rounded-xl border cursor-pointer transition ${
+                                    commandType === 'CONFIG_CAMERA'
+                                        ? 'border-indigo-600 bg-indigo-50/55'
+                                        : 'border-gray-200 hover:bg-gray-50'
+                                }`}>
+                                    <input
+                                        type="radio"
+                                        name="command"
+                                        value="CONFIG_CAMERA"
+                                        checked={commandType === 'CONFIG_CAMERA'}
+                                        onChange={() => setCommandType('CONFIG_CAMERA')}
+                                        className="sr-only"
+                                    />
+                                    <Sliders className={`w-5 h-5 ${commandType === 'CONFIG_CAMERA' ? 'text-indigo-600' : 'text-gray-500'}`} />
+                                    <div>
+                                        <p className="text-sm font-bold text-gray-900">Configurar Cámara</p>
+                                        <p className="text-xs text-gray-500">Resolución, brillo y contraste</p>
+                                    </div>
+                                </label>
                             </div>
                         </div>
+
+                        {commandType === 'CONFIG_CAMERA' && (
+                            <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 space-y-4 animate-fadeIn">
+                                <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Parámetros de la Cámara</h3>
+                                <div>
+                                    <label className="block text-[11px] font-bold text-gray-500 mb-1">Resolución</label>
+                                    <select
+                                        value={cameraResolution}
+                                        onChange={(e) => setCameraResolution(Number(e.target.value))}
+                                        className="w-full rounded-lg border border-gray-300 py-2 px-3 text-sm focus:border-indigo-500 focus:ring-indigo-550 text-gray-900 font-medium"
+                                    >
+                                        <option value={5}>QVGA (320x240)</option>
+                                        <option value={8}>VGA (640x480)</option>
+                                        <option value={9}>SVGA (800x600)</option>
+                                        <option value={10}>XGA (1024x768)</option>
+                                        <option value={11}>HD (1280x720)</option>
+                                        <option value={13}>UXGA (1600x1200)</option>
+                                        <option value={14}>FHD (1920x1080)</option>
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-gray-500 mb-1">Brillo</label>
+                                        <select
+                                            value={cameraBrightness}
+                                            onChange={(e) => setCameraBrightness(Number(e.target.value))}
+                                            className="w-full rounded-lg border border-gray-300 py-2 px-3 text-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                        >
+                                            <option value={-2}>-2 (Bajo)</option>
+                                            <option value={-1}>-1</option>
+                                            <option value={0}>0 (Normal)</option>
+                                            <option value={1}>+1</option>
+                                            <option value={2}>+2 (Alto)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-gray-500 mb-1">Contraste</label>
+                                        <select
+                                            value={cameraContrast}
+                                            onChange={(e) => setCameraContrast(Number(e.target.value))}
+                                            className="w-full rounded-lg border border-gray-300 py-2 px-3 text-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                        >
+                                            <option value={-2}>-2 (Bajo)</option>
+                                            <option value={-1}>-1</option>
+                                            <option value={0}>0 (Normal)</option>
+                                            <option value={1}>+1</option>
+                                            <option value={2}>+2 (Alto)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <button
                             type="submit"
@@ -268,9 +352,39 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                 <div key={cmd.command_id} className="flex items-start justify-between p-3.5 rounded-xl bg-gray-55/60 border border-gray-100 text-xs">
                                     <div className="space-y-1">
                                         <p className="font-bold text-gray-900">
-                                            {cmd.type === 'POLL_TELEMETRY' ? 'Telemetría' : cmd.type === 'POLL_IMAGE' ? 'Imagen' : 'PING'}
+                                            {cmd.type === 'POLL_TELEMETRY' 
+                                                ? 'Telemetría' 
+                                                : cmd.type === 'POLL_IMAGE' 
+                                                ? 'Imagen' 
+                                                : cmd.type === 'PING' 
+                                                ? 'PING' 
+                                                : 'Configurar Cámara'}
                                         </p>
                                         <p className="text-gray-500 font-medium">Nodo: {cmd.target_node_id}</p>
+                                        {cmd.parameters && cmd.type === 'CONFIG_CAMERA' && (
+                                            <p className="text-[10px] text-gray-500 font-medium">
+                                                Parámetros: {(() => {
+                                                    try {
+                                                        const p = JSON.parse(cmd.parameters);
+                                                        const getResLabel = (val: number) => {
+                                                            switch(val) {
+                                                                case 5: return "QVGA";
+                                                                case 8: return "VGA";
+                                                                case 9: return "SVGA";
+                                                                case 10: return "XGA";
+                                                                case 11: return "HD";
+                                                                case 13: return "UXGA";
+                                                                case 14: return "FHD";
+                                                                default: return `Res ${val}`;
+                                                            }
+                                                        };
+                                                        return `Res: ${getResLabel(p.resolution)}, Br: ${p.brightness}, Co: ${p.contrast}`;
+                                                    } catch {
+                                                        return cmd.parameters;
+                                                    }
+                                                })()}
+                                            </p>
+                                        )}
                                         {cmd.response && (
                                             <p className="text-gray-600 italic font-mono mt-1 border-l-2 pl-2 border-gray-300">
                                                 {cmd.response}

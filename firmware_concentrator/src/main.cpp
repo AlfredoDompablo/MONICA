@@ -1096,6 +1096,64 @@ void checkPendingCommands() {
                 sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
             }
         }
+        else if (type == "CONFIG_CAMERA") {
+            String paramStr = cmdObj["parameters"].as<String>();
+            int resVal = 10;
+            int brVal = 0;
+            int coVal = 1;
+            
+            if (paramStr != "null" && paramStr.length() > 0) {
+                DynamicJsonDocument paramDoc(200);
+                DeserializationError paramErr = deserializeJson(paramDoc, paramStr);
+                if (!paramErr) {
+                    resVal = paramDoc["resolution"] | 10;
+                    brVal = paramDoc["brightness"] | 0;
+                    coVal = paramDoc["contrast"] | 1;
+                }
+            }
+            
+            LoRaPacket packet;
+            memset(&packet, 0, sizeof(LoRaHeader));
+            packet.header.syncWord[0] = LORA_SYNC_0;
+            packet.header.syncWord[1] = LORA_SYNC_1;
+            packet.header.srcId = MY_NODE_ID; 
+            packet.header.destId = nodeNum;
+            packet.header.nextHopId = 1; 
+            packet.header.type = CMD_CONFIG_CAM;
+            packet.header.seqNum = packetSequence++;
+            packet.header.ttl = 5;
+            
+            CameraConfigPayload* ccp = (CameraConfigPayload*)packet.payload;
+            ccp->resolution = resVal;
+            ccp->brightness = brVal;
+            ccp->contrast = coVal;
+            
+            responseReceived = false;
+            targetNode = nodeNum;
+            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+            radio.startReceive();
+            
+            unsigned long waitStart = millis();
+            while (millis() - waitStart < 4000) {
+                smartDelay(10);
+                handleLoRa();
+                if (responseReceived) {
+                    success = true;
+                    responseMsg = "Configuración de cámara aplicada con éxito.";
+                    break;
+                }
+            }
+            if (!success) {
+                responseMsg = "Timeout: Sin confirmación ACK del nodo sensor.";
+            }
+            
+            updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+            if (success) {
+                sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+            } else {
+                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+            }
+        }
         else if (type == "PING") {
             LoRaPacket packet;
             memset(&packet, 0, sizeof(LoRaHeader));

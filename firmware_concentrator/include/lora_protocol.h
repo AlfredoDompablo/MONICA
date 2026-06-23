@@ -23,6 +23,7 @@ enum PacketType : uint8_t {
     CMD_REQ_TELEMETRY = 0x11,
     CMD_REQ_IMAGE     = 0x12,
     CMD_REQ_MISSING   = 0x13, // Concentrador -> Nodo (Petición de fragmentos perdidos)
+    CMD_CONFIG_CAM    = 0x14, // Concentrador -> Nodo (Configuración de la cámara)
     
     // Respuestas (Nodo -> Concentrador)
     ACK               = 0x20,
@@ -58,6 +59,13 @@ struct SensorPayload {
     uint16_t conductivity;
     float temperature;
     uint8_t battery_level;
+};
+
+// Payload de Configuración de Cámara (3 Bytes)
+struct CameraConfigPayload {
+    uint8_t resolution; // framesize_t (0-21)
+    int8_t brightness;  // -2 a 2
+    int8_t contrast;    // -2 a 2
 };
 
 // MTU Seguro para LoRa

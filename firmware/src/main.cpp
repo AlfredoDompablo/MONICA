@@ -21,6 +21,13 @@
 #include <RadioLib.h>
 #include "lora_protocol.h"
 #include "LittleFS.h"
+#include <Preferences.h>
+
+// --- Configuración Remota de la Cámara (Persistida en Preferences) ---
+Preferences preferences;
+uint8_t cam_resolution = 10; // XGA por defecto
+int8_t cam_brightness = 0;   // -2 a 2
+int8_t cam_contrast = 1;     // -2 a 2
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
@@ -195,6 +202,14 @@ void drawDashboard() {
 void setup() {
   Serial.begin(115200);
   
+  // Cargar configuración persistente de la cámara
+  preferences.begin("cam_config", false);
+  cam_resolution = preferences.getUChar("res", 10); // XGA por defecto
+  cam_brightness = preferences.getChar("br", 0);
+  cam_contrast = preferences.getChar("co", 1);
+  preferences.end();
+  Serial.printf("[CONFIG] Cámara cargada de Preferences: Res=%d, Br=%d, Co=%d\n", cam_resolution, cam_brightness, cam_contrast);
+
   // Inicializar LittleFS en la memoria Flash externa para almacenamiento temporal
   if (!LittleFS.begin(true)) {
     Serial.println("[ERROR] Error al montar LittleFS");
@@ -463,6 +478,26 @@ void requestAndSendImage(uint8_t destId) {
   Serial.println("[CAMERA DEBUG] Vaciando buffer RX de camSerial...");
   while(camSerial.available()) camSerial.read(); // Limpiar remanentes serie
   
+  // Enviar configuración a la cámara vía serial
+  Serial.printf("[CAMERA] Enviando configuración UART: Res=%d, Br=%d, Co=%d\n", cam_resolution, cam_brightness, cam_contrast);
+  camSerial.printf("SET_CONFIG %d %d %d\n", cam_resolution, cam_brightness, cam_contrast);
+  
+  // Esperar confirmación CONF_ACK (máximo 500ms)
+  unsigned long ackStart = millis();
+  bool gotConfAck = false;
+  while (millis() - ackStart < 500) {
+    if (camSerial.available()) {
+      String resp = camSerial.readStringUntil('\n');
+      resp.trim();
+      if (resp == "CONF_ACK") {
+        gotConfAck = true;
+        break;
+      }
+    }
+    delay(5);
+  }
+  Serial.printf("[CAMERA] Confirmación de configuración: %s\n", gotConfAck ? "OK (CONF_ACK)" : "TIMEOUT");
+
   // Solicitar disparo de foto
   Serial.println("[CAMERA DEBUG] Enviando TAKE_PIC a la camara...");
   camSerial.println("TAKE_PIC");
@@ -904,6 +939,37 @@ void handleLoRa() {
                 else if (rxPacket.header.type == CMD_REQ_IMAGE) {
                     delay(80); 
                     requestAndSendImage(rxPacket.header.srcId);
+                }
+                else if (rxPacket.header.type == CMD_CONFIG_CAM) {
+                    delay(80);
+                    CameraConfigPayload* ccp = (CameraConfigPayload*)rxPacket.payload;
+                    
+                    cam_resolution = constrain(ccp->resolution, 0, 21);
+                    cam_brightness = constrain(ccp->brightness, -2, 2);
+                    cam_contrast = constrain(ccp->contrast, -2, 2);
+                    
+                    // Guardar en Preferences de forma permanente
+                    preferences.begin("cam_config", false);
+                    preferences.putUChar("res", cam_resolution);
+                    preferences.putChar("br", cam_brightness);
+                    preferences.putChar("co", cam_contrast);
+                    preferences.end();
+                    
+                    Serial.printf("[CONFIG] Nueva configuración de cámara guardada: Res=%d, Br=%d, Co=%d\n", 
+                                  cam_resolution, cam_brightness, cam_contrast);
+                                  
+                    // Responder con ACK de confirmación
+                    LoRaPacket ackPacket;
+                    ackPacket.header.syncWord[0] = LORA_SYNC_0;
+                    ackPacket.header.syncWord[1] = LORA_SYNC_1;
+                    ackPacket.header.srcId = MY_NODE_ID;
+                    ackPacket.header.destId = rxPacket.header.srcId;
+                    ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+                    ackPacket.header.type = ACK;
+                    ackPacket.header.seqNum = packetSequence++;
+                    ackPacket.header.ttl = 5;
+                    radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
+                    radio.startReceive();
                 }
                 else if (rxPacket.header.type == CMD_PING) {
                     delay(80);
