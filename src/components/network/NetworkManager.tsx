@@ -284,13 +284,28 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                         onChange={(e) => setCameraResolution(Number(e.target.value))}
                                         className="w-full rounded-lg border border-gray-300 py-2 px-3 text-sm focus:border-indigo-500 focus:ring-indigo-550 text-gray-900 font-medium"
                                     >
+                                        <option value={0}>96x96</option>
+                                        <option value={1}>QQVGA (160x120)</option>
+                                        <option value={2}>QCIF (176x144)</option>
+                                        <option value={3}>HQVGA (240x176)</option>
+                                        <option value={4}>240x240</option>
                                         <option value={5}>QVGA (320x240)</option>
+                                        <option value={6}>CIF (400x296)</option>
+                                        <option value={7}>HVGA (480x320)</option>
                                         <option value={8}>VGA (640x480)</option>
                                         <option value={9}>SVGA (800x600)</option>
                                         <option value={10}>XGA (1024x768)</option>
                                         <option value={11}>HD (1280x720)</option>
+                                        <option value={12}>SXGA (1280x1024)</option>
                                         <option value={13}>UXGA (1600x1200)</option>
                                         <option value={14}>FHD (1920x1080)</option>
+                                        <option value={15}>P_HD (720x1280)</option>
+                                        <option value={16}>P_3MP (864x1536)</option>
+                                        <option value={17}>QXGA (2048x1536)</option>
+                                        <option value={18}>QHD (2560x1440)</option>
+                                        <option value={19}>WQXGA (2560x1600)</option>
+                                        <option value={20}>P_FHD (1080x1920)</option>
+                                        <option value={21}>QSXGA (2560x1920)</option>
                                     </select>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
@@ -368,13 +383,28 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                                         const p = JSON.parse(cmd.parameters);
                                                         const getResLabel = (val: number) => {
                                                             switch(val) {
+                                                                case 0: return "96x96";
+                                                                case 1: return "QQVGA";
+                                                                case 2: return "QCIF";
+                                                                case 3: return "HQVGA";
+                                                                case 4: return "240x240";
                                                                 case 5: return "QVGA";
+                                                                case 6: return "CIF";
+                                                                case 7: return "HVGA";
                                                                 case 8: return "VGA";
                                                                 case 9: return "SVGA";
                                                                 case 10: return "XGA";
                                                                 case 11: return "HD";
+                                                                case 12: return "SXGA";
                                                                 case 13: return "UXGA";
                                                                 case 14: return "FHD";
+                                                                case 15: return "P_HD";
+                                                                case 16: return "P_3MP";
+                                                                case 17: return "QXGA";
+                                                                case 18: return "QHD";
+                                                                case 19: return "WQXGA";
+                                                                case 20: return "P_FHD";
+                                                                case 21: return "QSXGA";
                                                                 default: return `Res ${val}`;
                                                             }
                                                         };
