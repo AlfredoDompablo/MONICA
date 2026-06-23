@@ -71,9 +71,11 @@ export async function GET(request: Request) {
                 take: limit,
                 skip: skip,
                 include: {
-                    node: {    // Incluir detalles básicos del nodo (descripción)
+                    node: {    // Incluir detalles básicos del nodo (descripción y coordenadas)
                         select: {
-                            description: true
+                            description: true,
+                            latitude: true,
+                            longitude: true
                         }
                     }
                 }

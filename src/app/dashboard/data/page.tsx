@@ -18,6 +18,8 @@ interface SensorReading {
   battery_level: number | null;
   node: {
     description: string;
+    latitude: number | string | null;
+    longitude: number | string | null;
   };
 }
 
@@ -257,6 +259,7 @@ export default function ReadingsPage() {
               <tr>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha/Hora</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nodo</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Coordenadas</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">pH</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Batería</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Temp (°C)</th>
@@ -269,11 +272,11 @@ export default function ReadingsPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Cargando datos...</td>
+                  <td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">Cargando datos...</td>
                 </tr>
               ) : readings.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">No se encontraron registros.</td>
+                  <td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">No se encontraron registros.</td>
                 </tr>
               ) : (
                 readings.map((reading) => (
@@ -284,6 +287,15 @@ export default function ReadingsPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <div className="font-medium text-gray-900">{reading.node_id}</div>
                       <div className="text-xs text-gray-400">{reading.node?.description}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {reading.node?.latitude !== null && reading.node?.longitude !== null && reading.node?.latitude !== undefined && reading.node?.longitude !== undefined ? (
+                        <div className="font-mono text-xs text-gray-600">
+                          {parseFloat(reading.node.latitude.toString()).toFixed(5)}, {parseFloat(reading.node.longitude.toString()).toFixed(5)}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reading.ph ?? '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
