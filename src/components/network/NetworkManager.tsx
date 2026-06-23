@@ -12,7 +12,8 @@ import {
     Camera, 
     Radio, 
     Trash2,
-    Sliders
+    Sliders,
+    ChevronDown
 } from 'lucide-react';
 
 interface NodeInfo {
@@ -51,6 +52,8 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     const [cameraResolution, setCameraResolution] = useState<number>(10);
     const [cameraBrightness, setCameraBrightness] = useState<number>(0);
     const [cameraContrast, setCameraContrast] = useState<number>(1);
+    const [cameraQuality, setCameraQuality] = useState<number>(14);
+    const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
     // Cargar Logs y Comandos desde la API
     const fetchData = useCallback(async () => {
@@ -76,6 +79,34 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
         return () => clearInterval(interval);
     }, [fetchData]);
 
+    // Cargar la última configuración de cámara del nodo seleccionado al cambiar de nodo
+    useEffect(() => {
+        if (!selectedNode) return;
+        
+        const fetchLastConfig = async () => {
+            try {
+                const res = await fetch(`/api/network/commands?limit=1&node_id=${selectedNode}&type=CONFIG_CAMERA`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.length > 0) {
+                        const cmd = data[0];
+                        if (cmd.parameters) {
+                            const params = JSON.parse(cmd.parameters);
+                            if (params.resolution !== undefined) setCameraResolution(Number(params.resolution));
+                            if (params.brightness !== undefined) setCameraBrightness(Number(params.brightness));
+                            if (params.contrast !== undefined) setCameraContrast(Number(params.contrast));
+                            if (params.quality !== undefined) setCameraQuality(Number(params.quality));
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching last camera config:', error);
+            }
+        };
+
+        fetchLastConfig();
+    }, [selectedNode]);
+
     const handleRefresh = async () => {
         setIsRefreshing(true);
         await fetchData();
@@ -100,7 +131,8 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                     parameters: commandType === 'CONFIG_CAMERA' ? {
                         resolution: cameraResolution,
                         brightness: cameraBrightness,
-                        contrast: cameraContrast
+                        contrast: cameraContrast,
+                        quality: cameraQuality
                     } : undefined
                 }),
             });
@@ -338,6 +370,44 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                         </select>
                                     </div>
                                 </div>
+
+                                {/* Ajustes Avanzados */}
+                                <div className="pt-3 border-t border-gray-200/70">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowAdvanced(!showAdvanced)}
+                                        className="flex items-center justify-between w-full text-[10px] font-bold text-gray-500 hover:text-gray-700 uppercase tracking-wider transition"
+                                    >
+                                        <span className="flex items-center gap-1.5">
+                                            <Sliders className="w-3.5 h-3.5" />
+                                            Ajustes Avanzados
+                                        </span>
+                                        <ChevronDown className={`w-3.5 h-3.5 transform transition-transform duration-200 ${showAdvanced ? 'rotate-180 text-indigo-650' : ''}`} />
+                                    </button>
+                                    
+                                    {showAdvanced && (
+                                        <div className="mt-3 space-y-3 pt-3 border-t border-dashed border-gray-200 animate-fadeIn">
+                                            <div>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-[10px] font-bold text-gray-500">Calidad JPG (Compresión)</label>
+                                                    <span className="text-[11px] font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">{cameraQuality}</span>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    min="10"
+                                                    max="63"
+                                                    value={cameraQuality}
+                                                    onChange={(e) => setCameraQuality(Number(e.target.value))}
+                                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 focus:outline-none"
+                                                />
+                                                <div className="flex justify-between text-[9px] text-gray-400 font-semibold mt-1">
+                                                    <span>10 (Alta Calidad)</span>
+                                                    <span>63 (Alta Compresión)</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
 
@@ -408,7 +478,7 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                                                 default: return `Res ${val}`;
                                                             }
                                                         };
-                                                        return `Res: ${getResLabel(p.resolution)}, Br: ${p.brightness}, Co: ${p.contrast}`;
+                                                        return `Res: ${getResLabel(p.resolution)}, Br: ${p.brightness}, Co: ${p.contrast}, Q: ${p.quality || 14}`;
                                                     } catch {
                                                         return cmd.parameters;
                                                     }

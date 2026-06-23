@@ -35,7 +35,19 @@ export async function GET(request: NextRequest) {
 
         // Si no hay API Key, es la interfaz web queriendo ver el historial de comandos
         const limit = parseInt(request.nextUrl.searchParams.get('limit') || '50');
+        const nodeId = request.nextUrl.searchParams.get('node_id');
+        const cmdType = request.nextUrl.searchParams.get('type');
+
+        const whereClause: any = {};
+        if (nodeId) {
+            whereClause.target_node_id = nodeId;
+        }
+        if (cmdType) {
+            whereClause.type = cmdType;
+        }
+
         const commands = await prisma.networkCommand.findMany({
+            where: whereClause,
             orderBy: { timestamp: 'desc' },
             take: limit
         });
