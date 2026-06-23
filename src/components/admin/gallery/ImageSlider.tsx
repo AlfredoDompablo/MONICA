@@ -8,10 +8,18 @@ interface ImageSliderProps {
     aspectRatio?: string;
 }
 
-export default function ImageSlider({ originalUrl, maskedUrl, aspectRatio = "aspect-video" }: ImageSliderProps) {
+export default function ImageSlider({ originalUrl, maskedUrl }: ImageSliderProps) {
     const [sliderPos, setSliderPos] = useState(50);
     const [isResizing, setIsResizing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [aspectRatio, setAspectRatio] = useState<number>(16 / 9);
+
+    const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+        const { naturalWidth, naturalHeight } = e.currentTarget;
+        if (naturalWidth && naturalHeight) {
+            setAspectRatio(naturalWidth / naturalHeight);
+        }
+    };
 
     const handleMove = (e: MouseEvent | TouchEvent) => {
         if (!isResizing || !containerRef.current) return;
@@ -44,7 +52,8 @@ export default function ImageSlider({ originalUrl, maskedUrl, aspectRatio = "asp
     return (
         <div 
             ref={containerRef}
-            className={`relative w-full ${aspectRatio} overflow-hidden rounded-lg cursor-col-resize select-none border border-gray-200 shadow-inner bg-gray-100`}
+            className="relative w-full overflow-hidden rounded-lg cursor-col-resize select-none border border-gray-200 shadow-inner bg-gray-100"
+            style={{ aspectRatio: aspectRatio }}
             onMouseDown={handleMouseDown}
             onTouchStart={handleMouseDown}
         >
@@ -53,6 +62,7 @@ export default function ImageSlider({ originalUrl, maskedUrl, aspectRatio = "asp
                 src={originalUrl} 
                 alt="Original" 
                 className="absolute inset-0 w-full h-full object-cover"
+                onLoad={handleImageLoad}
                 draggable={false}
             />
 
