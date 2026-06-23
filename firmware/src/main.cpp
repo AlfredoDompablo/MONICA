@@ -24,7 +24,7 @@
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
-#define MY_NODE_ID 2
+#define MY_NODE_ID 4
 
 // --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
 #if MY_NODE_ID == 2
@@ -88,13 +88,19 @@ int seenCount = 0;         // Contador dinámico de elementos almacenados en el 
  * Protege contra bloqueos infinitos limitando el procesamiento a 50 bytes por ciclo de lectura
  * en caso de que exista ruido electromagnético o flotación en el pin RX de hardware.
  */
-static void smartDelay(unsigned long ms) {
-  unsigned long start = millis();
-  do {
-    int maxBytes = 50; 
-    while (Serial1.available() && maxBytes-- > 0)
+// Tarea en segundo plano para decodificar GPS en el Core 0
+void gpsTask(void* pvParameters) {
+  Serial.println("[GPS] Tarea iniciada en el Core 0");
+  while (true) {
+    while (Serial1.available()) {
       gps.encode(Serial1.read());
-  } while (millis() - start < ms);
+    }
+    vTaskDelay(pdMS_TO_TICKS(10)); // Pausa de 10ms para no acaparar el núcleo
+  }
+}
+
+static void smartDelay(unsigned long ms) {
+  delay(ms);
 }
 
 // --- Variables del Panel Gráfico ---
@@ -227,6 +233,17 @@ void setup() {
 
   // Iniciar la UART GPS para la lectura en segundo plano
   Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
+
+  // Crear la tarea del GPS en el Core 0 (prioridad 1)
+  xTaskCreatePinnedToCore(
+    gpsTask,
+    "gpsTask",
+    4096,
+    NULL,
+    1,
+    NULL,
+    0
+  );
 
   // Inicializar bus SPI compartido con la pantalla para comunicarse con el módulo LoRa SX1262
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
@@ -707,36 +724,40 @@ void requestAndSendImage(uint8_t destId) {
                           waitingResponse = false;
                       }
                       else if (rxPacket.header.type == CMD_REQ_MISSING) {
-                          // Procesar lista selectiva de fragmentos faltantes
-                          uint16_t missingCount = 0;
-                          memcpy(&missingCount, rxPacket.payload, 2);
-                          uint16_t* sequences = (uint16_t*)(rxPacket.payload + 2);
-                          
-                          Serial.printf("LoRa Flow: ¡NACK recibido! %u fragmentos perdidos. Retransmitiendo...\n", missingCount);
-                          tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                          tft.setCursor(0, 42);
-                          tft.setTextColor(TFT_RED, TFT_BLACK);
-                          tft.printf("Estado: NACK %u reen...", missingCount);
+                           // Procesar lista selectiva de fragmentos faltantes
+                           uint16_t missingCount = 0;
+                           memcpy(&missingCount, rxPacket.payload, 2);
+                           
+                           // Evitar desbordamiento de búfer y asegurar la alineación de memoria
+                           if (missingCount > 98) missingCount = 98;
+                           uint16_t sequences[98];
+                           memcpy(sequences, rxPacket.payload + 2, missingCount * 2);
+                           
+                           Serial.printf("LoRa Flow: ¡NACK recibido! %u fragmentos perdidos. Retransmitiendo...\n", missingCount);
+                           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
+                           tft.setCursor(0, 42);
+                           tft.setTextColor(TFT_RED, TFT_BLACK);
+                           tft.printf("Estado: NACK %u reen...", missingCount);
 
-                          packet.header.type = DATA_IMG_CHUNK;
-                          
-                          // Retransmitir cada bloque pedido leyendo de la memoria Flash local
-                          for (uint16_t i = 0; i < missingCount; i++) {
-                              uint16_t seq = sequences[i];
-                              if (seq <= totalChunks) {
-                                  uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
-                                  uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - offset);
-                                  
-                                  // Leer directamente el fragmento desde la memoria Flash
-                                  readImgFile.seek(offset);
-                                  readImgFile.read(packet.payload, chunkLen);
-                                  
-                                  packet.header.seqNum = seq;
-                                  radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
-                                  Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) desde Flash local\n", seq, offset, chunkLen);
-                                  delay(DELAY_TX + 40); // Pacing de retransmisión más holgado para evitar saturación del receptor por SD card writes
-                              }
-                          }
+                           packet.header.type = DATA_IMG_CHUNK;
+                           
+                           // Retransmitir cada bloque pedido leyendo de la memoria Flash local
+                           for (uint16_t i = 0; i < missingCount; i++) {
+                               uint16_t seq = sequences[i];
+                               if (seq <= totalChunks) {
+                                   uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
+                                   uint32_t chunkLen = min((uint32_t)LORA_MAX_PAYLOAD, imgSize - offset);
+                                   
+                                   // Leer directamente el fragmento desde la memoria Flash
+                                   readImgFile.seek(offset);
+                                   readImgFile.read(packet.payload, chunkLen);
+                                   
+                                   packet.header.seqNum = seq;
+                                   radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + chunkLen);
+                                   Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) desde Flash local\n", seq, offset, chunkLen);
+                                   delay(DELAY_TX + 40); // Pacing de retransmisión más holgado para evitar saturación del receptor por SD card writes
+                               }
+                           }
                           
                           // Enviar DATA_IMG_END de nuevo para cerrar el lote de retransmisión
                           delay(500);
@@ -860,11 +881,43 @@ void handleLoRa() {
                 // Ejecutar la acción solicitada
                 if (rxPacket.header.type == CMD_REQ_TELEMETRY) {
                     delay(80); // Margen mínimo de estabilización
-                    sendSensorTelemetry(rxPacket.header.srcId);
+                    if (gps.location.isValid() && gps.location.age() < 5000) {
+                        sendSensorTelemetry(rxPacket.header.srcId);
+                    } else {
+                        // Enviar respuesta NACK indicando que no hay fix
+                        LoRaPacket nackPacket;
+                        nackPacket.header.syncWord[0] = LORA_SYNC_0;
+                        nackPacket.header.syncWord[1] = LORA_SYNC_1;
+                        nackPacket.header.srcId = MY_NODE_ID;
+                        nackPacket.header.destId = rxPacket.header.srcId;
+                        nackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+                        nackPacket.header.type = NACK;
+                        nackPacket.header.seqNum = packetSequence++;
+                        nackPacket.header.ttl = 5;
+                        
+                        strcpy((char*)nackPacket.payload, "GPS_NO_FIX");
+                        radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 11);
+                        radio.startReceive();
+                        Serial.println("[GPS WARNING] Petición de telemetría recibida pero no hay GPS fix. Enviado NACK.");
+                    }
                 } 
                 else if (rxPacket.header.type == CMD_REQ_IMAGE) {
                     delay(80); 
                     requestAndSendImage(rxPacket.header.srcId);
+                }
+                else if (rxPacket.header.type == CMD_PING) {
+                    delay(80);
+                    LoRaPacket ackPacket;
+                    ackPacket.header.syncWord[0] = LORA_SYNC_0;
+                    ackPacket.header.syncWord[1] = LORA_SYNC_1;
+                    ackPacket.header.srcId = MY_NODE_ID;
+                    ackPacket.header.destId = rxPacket.header.srcId;
+                    ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+                    ackPacket.header.type = ACK;
+                    ackPacket.header.seqNum = packetSequence++;
+                    ackPacket.header.ttl = 5;
+                    radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
+                    radio.startReceive();
                 }
             } 
             // --- ENRUTAMIENTO DE RED LINEAL ---

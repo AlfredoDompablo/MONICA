@@ -59,6 +59,13 @@
 #define SD_CS   7             ///< Chip Select (Habilitador) para tarjeta SD
 
 // ============================================================================
+// --- DECLARACIÓN DE PROTOTIPOS DE FUNCIONES ---
+// ============================================================================
+void sendNetworkLog(String level, String message, String nodeId = "NODE_C");
+void updateCommandStatus(int commandId, String status, String response);
+void checkPendingCommands();
+
+// ============================================================================
 // --- INSTANCIACIÓN DE OBJETOS GLOBALES ---
 // ============================================================================
 TinyGPSPlus gps;              ///< Decodificador de sentencias GPS NMEA
@@ -89,7 +96,10 @@ uint16_t expectedSeqNum = 0;             ///< Fragmento de secuencia esperado. 0
 unsigned long lastChunkReceivedTime = 0;  ///< Último milisegundo en que se recibió un fragmento (Timeout check)
 bool* chunkReceived = NULL;              ///< Bitmap dinámico en RAM para control de retransmisión selectiva (ARQ)
 uint16_t totalChunks = 0;                ///< Número total de fragmentos de la imagen activa
+uint8_t missingAttempts = 0;             ///< Contador de intentos de solicitud de fragmentos perdidos
 uint32_t imgSize = 0;                    ///< Tamaño neto en bytes de la imagen capturada
+int activeImageCommandId = 0;            ///< ID del comando web que solicitó la foto activa
+volatile bool isGpsNotFixed = false;     ///< Indica si el nodo sensor respondió que no tiene fix de GPS
 
 unsigned long lastPollTime = 0;          ///< Última vez que se sondeó un nodo
 const unsigned long pollInterval = 30000;///< Intervalo de sondeo (30 segundos)
@@ -381,6 +391,33 @@ void setup() {
 }
 
 /**
+ * @brief Envía logs de diagnóstico de red a la API web de MONICA.
+ */
+void sendNetworkLog(String level, String message, String nodeId) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  
+  // Reemplazar la ruta base para apuntar al endpoint de logs de red
+  String url = String(API_URL);
+  url.replace("/api/sensor-readings", "/api/network/logs");
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-key", API_KEY);
+  
+  StaticJsonDocument<300> doc;
+  doc["level"] = level;
+  doc["message"] = message;
+  doc["node_id"] = nodeId;
+  
+  String jsonOutput;
+  serializeJson(doc, jsonOutput);
+  
+  http.POST(jsonOutput);
+  http.end();
+}
+
+/**
  * @brief Envía lecturas de telemetría a la API ambiental en formato JSON.
  */
 void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
@@ -470,6 +507,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         }
         chunkReceived = (bool*)calloc(2048, sizeof(bool));
         expectedSeqNum = 1;
+        missingAttempts = 0;
         
         if (SD.exists(filename)) {
             SD.remove(filename);
@@ -506,6 +544,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             chunkReceived = (bool*)calloc(2048, sizeof(bool));
             totalChunks = 2048; 
             expectedSeqNum = 1;
+            missingAttempts = 0;
             
             if (SD.exists(filename)) {
                 SD.remove(filename);
@@ -600,35 +639,56 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
 
         // Solicitar retransmisión (NACK) si faltan fragmentos
         if (missingCount > 0) {
-            Serial.printf("LoRa Integrity: ¡Perdidos %u chunks! Enviando petición de retransmisión CMD_REQ_MISSING...\n", missingCount);
-            
-            tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-            tft.setCursor(0, 53);
-            tft.setTextColor(TFT_RED, TFT_BLACK);
-            tft.printf("NACK: %u Chunks", missingCount);
-            
-            LoRaPacket nackPacket;
-            memset(&nackPacket, 0, sizeof(LoRaHeader));
-            nackPacket.header.syncWord[0] = LORA_SYNC_0;
-            nackPacket.header.syncWord[1] = LORA_SYNC_1;
-            nackPacket.header.srcId = MY_NODE_ID; 
-            nackPacket.header.destId = packet->header.srcId;
-            nackPacket.header.nextHopId = 1; 
-            nackPacket.header.type = CMD_REQ_MISSING;
-            nackPacket.header.seqNum = packetSequence++;
-            nackPacket.header.ttl = 5;
-            
-            memcpy(nackPacket.payload, &missingCount, 2);
-            memcpy(nackPacket.payload + 2, firstMissing, missingCount * 2);
-            
-            delay(80); 
-            radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
-            radio.startReceive();
-            return;
+            if (missingAttempts >= 3) {
+                Serial.printf("LoRa Integrity: ¡Perdidos %u chunks, pero se alcanzó el límite de 3 intentos! Consolidando imagen con faltantes...\n", missingCount);
+                tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+                tft.setCursor(0, 53);
+                tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+                tft.print("Img Incompleta!");
+                
+                if (activeImageCommandId > 0) {
+                    updateCommandStatus(activeImageCommandId, "FAILED", "Imagen incompleta después de 3 reintentos LoRa.");
+                    activeImageCommandId = 0;
+                }
+                
+                missingCount = 0; // Forzar flujo de finalización
+            } else {
+                missingAttempts++;
+                Serial.printf("LoRa Integrity: ¡Perdidos %u chunks! Enviando petición de retransmisión CMD_REQ_MISSING (Intento %d/3)...\n", missingCount, missingAttempts);
+                
+                tft.fillRect(0, 53, 160, 10, TFT_BLACK);
+                tft.setCursor(0, 53);
+                tft.setTextColor(TFT_RED, TFT_BLACK);
+                tft.printf("NACK: %u (Int %d)", missingCount, missingAttempts);
+                
+                LoRaPacket nackPacket;
+                memset(&nackPacket, 0, sizeof(LoRaHeader));
+                nackPacket.header.syncWord[0] = LORA_SYNC_0;
+                nackPacket.header.syncWord[1] = LORA_SYNC_1;
+                nackPacket.header.srcId = MY_NODE_ID; 
+                nackPacket.header.destId = packet->header.srcId;
+                nackPacket.header.nextHopId = 1; 
+                nackPacket.header.type = CMD_REQ_MISSING;
+                nackPacket.header.seqNum = packetSequence++;
+                nackPacket.header.ttl = 5;
+                
+                memcpy(nackPacket.payload, &missingCount, 2);
+                memcpy(nackPacket.payload + 2, firstMissing, missingCount * 2);
+                
+                delay(80); 
+                radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
+                radio.startReceive();
+                return;
+            }
         }
 
         // Éxito: 100% de la imagen reensamblada correctamente
         Serial.println("LoRa Integrity: ¡100% de fragmentos recibidos con éxito! Enviando ACK final...");
+        
+        if (activeImageCommandId > 0) {
+            updateCommandStatus(activeImageCommandId, "COMPLETED", "Imagen recibida al 100% con éxito.");
+            activeImageCommandId = 0;
+        }
         
         tft.fillRect(0, 53, 160, 10, TFT_BLACK);
         tft.setCursor(0, 53);
@@ -811,8 +871,25 @@ void handleLoRa() {
                         tft.setTextColor(TFT_GREEN, TFT_BLACK);
                         tft.printf("ACK Nodo %d", packet.header.srcId);
                         
-                        if (packet.header.srcId == targetNode && pollForImage) {
+                        if (packet.header.srcId == targetNode) {
                             responseReceived = true; 
+                        }
+                    }
+                    // NACK / Respuesta de error del nodo
+                    else if (packet.header.type == NACK) {
+                        char payloadBuf[LORA_MAX_PAYLOAD + 1];
+                        size_t safeLen = min(payloadLen, (size_t)LORA_MAX_PAYLOAD);
+                        memcpy(payloadBuf, packet.payload, safeLen);
+                        payloadBuf[safeLen] = '\0';
+                        String payloadMsg = String(payloadBuf);
+                        
+                        Serial.printf("LoRa RX: NACK recibido de Nodo %d. Mensaje: %s\n", packet.header.srcId, payloadMsg.c_str());
+                        
+                        if (packet.header.srcId == targetNode) {
+                            if (payloadMsg == "GPS_NO_FIX") {
+                                isGpsNotFixed = true;
+                            }
+                            responseReceived = true; // Liberar polling de red
                         }
                     }
                 }
@@ -878,6 +955,200 @@ void handleSerial() {
 }
 
 /**
+ * @brief Actualiza el estado de un comando en la base de datos de la web.
+ */
+void updateCommandStatus(int commandId, String status, String response) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  
+  String url = String(API_URL);
+  url.replace("/api/sensor-readings", "/api/network/commands/" + String(commandId));
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-key", API_KEY);
+  
+  StaticJsonDocument<300> doc;
+  doc["status"] = status;
+  doc["response"] = response;
+  
+  String jsonOutput;
+  serializeJson(doc, jsonOutput);
+  
+  http.PUT(jsonOutput);
+  http.end();
+}
+
+/**
+ * @brief Consulta la API web por comandos LoRa pendientes y los ejecuta.
+ */
+void checkPendingCommands() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (expectedSeqNum > 0) return; // No hacer polling de comandos si se está descargando una foto
+  
+  HTTPClient http;
+  String url = String(API_URL);
+  url.replace("/api/sensor-readings", "/api/network/commands");
+  
+  http.begin(url);
+  http.addHeader("x-api-key", API_KEY);
+  
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (!error && doc.is<JsonArray>()) {
+      JsonArray array = doc.as<JsonArray>();
+      if (array.size() > 0) {
+        JsonObject cmdObj = array[0];
+        int commandId = cmdObj["command_id"];
+        String type = cmdObj["type"];
+        String targetNodeId = cmdObj["target_node_id"];
+        
+        Serial.printf("[COMMAND] Recibido de la web: ID %d, Tipo %s, Destino %s\n", commandId, type.c_str(), targetNodeId.c_str());
+        sendNetworkLog("INFO", "Recibido comando " + type + " para " + targetNodeId + " desde la web. Ejecutando...", "NODE_C");
+        
+        updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa...");
+        
+        int nodeNum = 1;
+        if (targetNodeId.startsWith("NODE_00")) {
+            nodeNum = targetNodeId.substring(7).toInt();
+        } else if (targetNodeId.startsWith("NODE_")) {
+            nodeNum = targetNodeId.substring(5).toInt();
+        }
+        
+        bool success = false;
+        String responseMsg = "";
+        
+        if (type == "POLL_TELEMETRY") {
+            responseReceived = false;
+            isGpsNotFixed = false;
+            currentAttempt = 1;
+            requestSentTime = millis();
+            currentTimeout = 3500;
+            pollState = POLL_STATE_WAITING_RESPONSE;
+            targetNode = nodeNum;
+            pollForImage = false;
+            
+            pollNode(nodeNum, CMD_REQ_TELEMETRY);
+            
+            unsigned long waitStart = millis();
+            while (millis() - waitStart < 4000) {
+                smartDelay(10);
+                handleLoRa();
+                if (responseReceived) {
+                    if (isGpsNotFixed) {
+                        success = false;
+                        responseMsg = "El nodo no tiene señal fija de GPS. Re-intentar más tarde.";
+                    } else {
+                        success = true;
+                        responseMsg = "Telemetría recibida con éxito.";
+                    }
+                    break;
+                }
+            }
+            if (!success && responseMsg == "") {
+                responseMsg = "Timeout: No se recibió respuesta de telemetría LoRa.";
+            }
+            
+            updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+            if (success) {
+                sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+            } else {
+                sendNetworkLog("WARNING", "Fallo al ejecutar comando " + type + ": " + responseMsg, targetNodeId);
+            }
+        } 
+        else if (type == "POLL_IMAGE") {
+            responseReceived = false;
+            currentAttempt = 1;
+            requestSentTime = millis();
+            currentTimeout = 6000;
+            pollState = POLL_STATE_WAITING_RESPONSE;
+            targetNode = nodeNum;
+            pollForImage = true;
+            
+            // Registrar el ID del comando activo para actualizarlo cuando finalice la transferencia del archivo
+            activeImageCommandId = commandId;
+            
+            pollNode(nodeNum, CMD_REQ_IMAGE);
+            
+            unsigned long waitStart = millis();
+            while (millis() - waitStart < 7000) {
+                smartDelay(10);
+                handleLoRa();
+                if (expectedSeqNum > 0 || responseReceived) {
+                    success = true;
+                    responseMsg = "Disparo exitoso. Descargando imagen...";
+                    break;
+                }
+            }
+            if (!success) {
+                responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
+                updateCommandStatus(commandId, "FAILED", responseMsg);
+                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+                activeImageCommandId = 0; // Cancelar comando activo
+            } else {
+                // Si inició correctamente, se mantiene en PROCESSING y se actualiza al final de la descarga (DATA_IMG_END)
+                updateCommandStatus(commandId, "PROCESSING", "Iniciando recepción de fragmentos de imagen...");
+                sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
+            }
+        }
+        else if (type == "PING") {
+            LoRaPacket packet;
+            memset(&packet, 0, sizeof(LoRaHeader));
+            packet.header.syncWord[0] = LORA_SYNC_0;
+            packet.header.syncWord[1] = LORA_SYNC_1;
+            packet.header.srcId = MY_NODE_ID; 
+            packet.header.destId = nodeNum;
+            packet.header.nextHopId = 1; 
+            packet.header.type = CMD_PING;
+            packet.header.seqNum = packetSequence++;
+            packet.header.ttl = 5;
+            
+            responseReceived = false;
+            targetNode = nodeNum;
+            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+            radio.startReceive();
+            
+            unsigned long waitStart = millis();
+            while (millis() - waitStart < 3000) {
+                smartDelay(10);
+                handleLoRa();
+                if (responseReceived) {
+                    success = true;
+                    responseMsg = "Ping LoRa exitoso. Nodo activo.";
+                    break;
+                }
+            }
+            if (!success) {
+                responseMsg = "Fallo de conexión: Sin respuesta de ping LoRa.";
+            }
+            
+            updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+            if (success) {
+                sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+            } else {
+                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+            }
+        }
+        else {
+            responseMsg = "Comando desconocido o no soportado.";
+            updateCommandStatus(commandId, "FAILED", responseMsg);
+            sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+        }
+        
+        pollState = POLL_STATE_IDLE;
+        lastPollTime = millis();
+      }
+    }
+  }
+  http.end();
+}
+
+/**
  * @brief Bucle principal de ejecución del concentrador.
  */
 void loop() {
@@ -889,9 +1160,20 @@ void loop() {
     lastHeartbeat = millis();
   }
   
-  smartDelay(10); 
+  if (expectedSeqNum == 0) {
+    smartDelay(10); 
+  } else {
+    delay(1); // Evitar bloqueos de GPS para maximizar la velocidad y evitar pérdidas de paquetes LoRa
+  }
   handleLoRa();
   handleSerial();
+
+  // Consultar comandos pendientes cada 5 segundos de forma no-bloqueante
+  static unsigned long lastCommandCheck = 0;
+  if (expectedSeqNum == 0 && (millis() - lastCommandCheck > 5000)) {
+      checkPendingCommands();
+      lastCommandCheck = millis();
+  }
   
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
   if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
@@ -906,6 +1188,12 @@ void loop() {
           chunkReceived = NULL;
       }
       lastPollTime = millis(); 
+      
+      if (activeImageCommandId > 0) {
+          updateCommandStatus(activeImageCommandId, "FAILED", "Timeout de inactividad de 60s esperando fragmentos de imagen.");
+          sendNetworkLog("ERROR", "Timeout de inactividad de 60s esperando fragmentos de imagen.", "NODE_C");
+          activeImageCommandId = 0;
+      }
       
       tft.fillRect(0, 53, 160, 10, TFT_BLACK);
       tft.setCursor(0, 53);
