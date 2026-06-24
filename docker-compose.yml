@@ -25,3 +25,12 @@ services:
     volumes:
       - ./minio_data:/data
     restart: always
+
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: monica_mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+    restart: always
