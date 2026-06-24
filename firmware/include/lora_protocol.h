@@ -61,12 +61,32 @@ struct SensorPayload {
     uint8_t battery_level;
 };
 
-// Payload de Configuración de Cámara (4 Bytes)
+// Payload de Configuración de Cámara (24 Bytes)
 struct CameraConfigPayload {
-    uint8_t resolution; // framesize_t (0-21)
-    int8_t brightness;  // -2 a 2
-    int8_t contrast;    // -2 a 2
-    uint8_t quality;    // Calidad JPEG (10-63)
+    uint8_t resolution;      // framesize_t (0-21)
+    int8_t brightness;       // -2 a 2
+    int8_t contrast;         // -2 a 2
+    uint8_t quality;         // Calidad JPEG (10-63)
+    int8_t saturation;       // -2 a 2
+    uint8_t special_effect;  // 0 a 6
+    uint8_t whitebal;        // 0 o 1
+    uint8_t awb_gain;        // 0 o 1
+    uint8_t wb_mode;         // 0 a 4
+    uint8_t exposure_ctrl;   // 0 o 1
+    uint8_t aec2;            // 0 o 1
+    int8_t ae_level;         // -2 a 2
+    uint16_t aec_value;      // 0 a 1200
+    uint8_t gain_ctrl;       // 0 o 1
+    uint8_t agc_gain;        // 0 a 30
+    uint8_t gainceiling;     // 0 a 6
+    uint8_t bpc;             // 0 o 1
+    uint8_t wpc;             // 0 o 1
+    uint8_t raw_gma;         // 0 o 1
+    uint8_t lenc;            // 0 o 1
+    uint8_t hmirror;         // 0 o 1
+    uint8_t vflip;           // 0 o 1
+    uint8_t dcw;             // 0 o 1
+    uint8_t colorbar;        // 0 o 1
 };
 
 // MTU Seguro para LoRa
