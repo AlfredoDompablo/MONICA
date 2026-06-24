@@ -29,6 +29,26 @@ uint8_t cam_resolution = 10; // XGA por defecto
 int8_t cam_brightness = 0;   // -2 a 2
 int8_t cam_contrast = 1;     // -2 a 2
 uint8_t cam_quality = 24;    // Calidad JPEG (10-63, default balanceado)
+int8_t cam_saturation = 0;
+uint8_t cam_special_effect = 0;
+uint8_t cam_whitebal = 1;
+uint8_t cam_awb_gain = 1;
+uint8_t cam_wb_mode = 0;
+uint8_t cam_exposure_ctrl = 1;
+uint8_t cam_aec2 = 0;
+int8_t cam_ae_level = 0;
+uint16_t cam_aec_value = 300;
+uint8_t cam_gain_ctrl = 1;
+uint8_t cam_agc_gain = 0;
+uint8_t cam_gainceiling = 0;
+uint8_t cam_bpc = 0;
+uint8_t cam_wpc = 1;
+uint8_t cam_raw_gma = 1;
+uint8_t cam_lenc = 1;
+uint8_t cam_hmirror = 0;
+uint8_t cam_vflip = 0;
+uint8_t cam_dcw = 1;
+uint8_t cam_colorbar = 0;
 
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la topología lineal.
@@ -203,14 +223,33 @@ void drawDashboard() {
 void setup() {
   Serial.begin(115200);
   
-  // Cargar configuración persistente de la cámara
   preferences.begin("cam_config", false);
   cam_resolution = preferences.getUChar("res", 10); // XGA por defecto
   cam_brightness = preferences.getChar("br", 0);
   cam_contrast = preferences.getChar("co", 1);
   cam_quality = preferences.getUChar("qty", 24);
+  cam_saturation = preferences.getChar("sat", 0);
+  cam_special_effect = preferences.getUChar("ef", 0);
+  cam_whitebal = preferences.getUChar("wb", 1);
+  cam_awb_gain = preferences.getUChar("awg", 1);
+  cam_wb_mode = preferences.getUChar("wbm", 0);
+  cam_exposure_ctrl = preferences.getUChar("ec", 1);
+  cam_aec2 = preferences.getUChar("aec2", 0);
+  cam_ae_level = preferences.getChar("ael", 0);
+  cam_aec_value = preferences.getUShort("aev", 300);
+  cam_gain_ctrl = preferences.getUChar("gc", 1);
+  cam_agc_gain = preferences.getUChar("agg", 0);
+  cam_gainceiling = preferences.getUChar("gcl", 0);
+  cam_bpc = preferences.getUChar("bpc", 0);
+  cam_wpc = preferences.getUChar("wpc", 1);
+  cam_raw_gma = preferences.getUChar("rgm", 1);
+  cam_lenc = preferences.getUChar("lnc", 1);
+  cam_hmirror = preferences.getUChar("hmr", 0);
+  cam_vflip = preferences.getUChar("vfl", 0);
+  cam_dcw = preferences.getUChar("dcw", 1);
+  cam_colorbar = preferences.getUChar("cbr", 0);
   preferences.end();
-  Serial.printf("[CONFIG] Cámara cargada de Preferences: Res=%d, Br=%d, Co=%d, Qty=%d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
+  Serial.printf("[CONFIG] Cámara cargada de Preferences. Res=%d, Br=%d, Co=%d, Qty=%d, Sat=%d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality, cam_saturation);
 
   // Inicializar LittleFS en la memoria Flash externa para almacenamiento temporal
   if (!LittleFS.begin(true)) {
@@ -481,8 +520,14 @@ void requestAndSendImage(uint8_t destId) {
   while(camSerial.available()) camSerial.read(); // Limpiar remanentes serie
   
   // Enviar configuración a la cámara vía serial
-  Serial.printf("[CAMERA] Enviando configuración UART: Res=%d, Br=%d, Co=%d, Qty=%d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
-  camSerial.printf("SET_CONFIG %d %d %d %d\n", cam_resolution, cam_brightness, cam_contrast, cam_quality);
+  Serial.printf("[CAMERA] Enviando configuración UART completa de 24 parametros...\n");
+  camSerial.printf("SET_CONFIG %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                    cam_resolution, cam_brightness, cam_contrast, cam_quality,
+                    cam_saturation, cam_special_effect, cam_whitebal, cam_awb_gain,
+                    cam_wb_mode, cam_exposure_ctrl, cam_aec2, cam_ae_level,
+                    cam_aec_value, cam_gain_ctrl, cam_agc_gain, cam_gainceiling,
+                    cam_bpc, cam_wpc, cam_raw_gma, cam_lenc,
+                    cam_hmirror, cam_vflip, cam_dcw, cam_colorbar);
   
   // Esperar confirmación CONF_ACK (máximo 500ms)
   unsigned long ackStart = millis();
@@ -950,6 +995,26 @@ void handleLoRa() {
                     cam_brightness = constrain(ccp->brightness, -2, 2);
                     cam_contrast = constrain(ccp->contrast, -2, 2);
                     cam_quality = constrain(ccp->quality, 10, 63);
+                    cam_saturation = constrain(ccp->saturation, -2, 2);
+                    cam_special_effect = constrain(ccp->special_effect, 0, 6);
+                    cam_whitebal = constrain(ccp->whitebal, 0, 1);
+                    cam_awb_gain = constrain(ccp->awb_gain, 0, 1);
+                    cam_wb_mode = constrain(ccp->wb_mode, 0, 4);
+                    cam_exposure_ctrl = constrain(ccp->exposure_ctrl, 0, 1);
+                    cam_aec2 = constrain(ccp->aec2, 0, 1);
+                    cam_ae_level = constrain(ccp->ae_level, -2, 2);
+                    cam_aec_value = constrain(ccp->aec_value, 0, 1200);
+                    cam_gain_ctrl = constrain(ccp->gain_ctrl, 0, 1);
+                    cam_agc_gain = constrain(ccp->agc_gain, 0, 30);
+                    cam_gainceiling = constrain(ccp->gainceiling, 0, 6);
+                    cam_bpc = constrain(ccp->bpc, 0, 1);
+                    cam_wpc = constrain(ccp->wpc, 0, 1);
+                    cam_raw_gma = constrain(ccp->raw_gma, 0, 1);
+                    cam_lenc = constrain(ccp->lenc, 0, 1);
+                    cam_hmirror = constrain(ccp->hmirror, 0, 1);
+                    cam_vflip = constrain(ccp->vflip, 0, 1);
+                    cam_dcw = constrain(ccp->dcw, 0, 1);
+                    cam_colorbar = constrain(ccp->colorbar, 0, 1);
                     
                     // Guardar en Preferences de forma permanente
                     preferences.begin("cam_config", false);
@@ -957,6 +1022,26 @@ void handleLoRa() {
                     preferences.putChar("br", cam_brightness);
                     preferences.putChar("co", cam_contrast);
                     preferences.putUChar("qty", cam_quality);
+                    preferences.putChar("sat", cam_saturation);
+                    preferences.putUChar("ef", cam_special_effect);
+                    preferences.putUChar("wb", cam_whitebal);
+                    preferences.putUChar("awg", cam_awb_gain);
+                    preferences.putUChar("wbm", cam_wb_mode);
+                    preferences.putUChar("ec", cam_exposure_ctrl);
+                    preferences.putUChar("aec2", cam_aec2);
+                    preferences.putChar("ael", cam_ae_level);
+                    preferences.putUShort("aev", cam_aec_value);
+                    preferences.putUChar("gc", cam_gain_ctrl);
+                    preferences.putUChar("agg", cam_agc_gain);
+                    preferences.putUChar("gcl", cam_gainceiling);
+                    preferences.putUChar("bpc", cam_bpc);
+                    preferences.putUChar("wpc", cam_wpc);
+                    preferences.putUChar("rgm", cam_raw_gma);
+                    preferences.putUChar("lnc", cam_lenc);
+                    preferences.putUChar("hmr", cam_hmirror);
+                    preferences.putUChar("vfl", cam_vflip);
+                    preferences.putUChar("dcw", cam_dcw);
+                    preferences.putUChar("cbr", cam_colorbar);
                     preferences.end();
                     
                     Serial.printf("[CONFIG] Nueva configuración de cámara guardada: Res=%d, Br=%d, Co=%d, Qty=%d\n", 
