@@ -324,36 +324,93 @@ void loop() {
       delay(500);
       updateMenu();
     }
-    // Comando: SET_CONFIG <res> <br> <co> <quality>
+    // Comando: SET_CONFIG <res> <br> <co> <qty> <sa> <ef> <wb> <aw> <wm> <ec> <a2> <al> <av> <gc> <ag> <gl> <bp> <wp> <rg> <lc> <hm> <vf> <dw> <cb>
     else if (cmd.startsWith("SET_CONFIG")) {
-      int firstSpace = cmd.indexOf(' ');
-      int secondSpace = cmd.indexOf(' ', firstSpace + 1);
-      int thirdSpace = cmd.indexOf(' ', secondSpace + 1);
-      int fourthSpace = cmd.indexOf(' ', thirdSpace + 1);
-      if (firstSpace != -1 && secondSpace != -1 && thirdSpace != -1) {
-        int res = cmd.substring(firstSpace + 1, secondSpace).toInt();
-        int br = cmd.substring(secondSpace + 1, thirdSpace).toInt();
-        int co = (fourthSpace != -1) ? cmd.substring(thirdSpace + 1, fourthSpace).toInt() : cmd.substring(thirdSpace + 1).toInt();
-        int qty = (fourthSpace != -1) ? cmd.substring(fourthSpace + 1).toInt() : 14;
-        
+      int res = 10, br = 0, co = 1, qty = 14;
+      int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0, al = 0, av = 300;
+      int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1, hm = 0, vf = 0, dw = 1, cb = 0;
+      
+      int parsed = sscanf(cmd.c_str() + 11, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+                          &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm, &ec, &a2, &al, &av, &gc, &ag, &gl, &bp, &wp, &rg, &lc, &hm, &vf, &dw, &cb);
+      
+      if (parsed >= 3) {
         res = constrain(res, 0, 21);
         br = constrain(br, -2, 2);
         co = constrain(co, -2, 2);
-        qty = constrain(qty, 10, 63);
+        if (parsed >= 4) qty = constrain(qty, 10, 63);
+        if (parsed >= 5) sa = constrain(sa, -2, 2);
+        if (parsed >= 6) ef = constrain(ef, 0, 6);
+        if (parsed >= 7) wb = constrain(wb, 0, 1);
+        if (parsed >= 8) aw = constrain(aw, 0, 1);
+        if (parsed >= 9) wm = constrain(wm, 0, 4);
+        if (parsed >= 10) ec = constrain(ec, 0, 1);
+        if (parsed >= 11) a2 = constrain(a2, 0, 1);
+        if (parsed >= 12) al = constrain(al, -2, 2);
+        if (parsed >= 13) av = constrain(av, 0, 1200);
+        if (parsed >= 14) gc = constrain(gc, 0, 1);
+        if (parsed >= 15) ag = constrain(ag, 0, 30);
+        if (parsed >= 16) gl = constrain(gl, 0, 6);
+        if (parsed >= 17) bp = constrain(bp, 0, 1);
+        if (parsed >= 18) wp = constrain(wp, 0, 1);
+        if (parsed >= 19) rg = constrain(rg, 0, 1);
+        if (parsed >= 20) lc = constrain(lc, 0, 1);
+        if (parsed >= 21) hm = constrain(hm, 0, 1);
+        if (parsed >= 22) vf = constrain(vf, 0, 1);
+        if (parsed >= 23) dw = constrain(dw, 0, 1);
+        if (parsed >= 24) cb = constrain(cb, 0, 1);
         
         menu[0].currentVal = res;
         menu[1].currentVal = br;
         menu[2].currentVal = co;
-        // La calidad no se muestra directamente en el menú de 3 filas iniciales pero se aplica
-        
+        if (parsed >= 5) menu[3].currentVal = sa;
+        if (parsed >= 6) menu[4].currentVal = ef;
+        if (parsed >= 7) menu[5].currentVal = wb;
+        if (parsed >= 8) menu[6].currentVal = aw;
+        if (parsed >= 9) menu[7].currentVal = wm;
+        if (parsed >= 10) menu[8].currentVal = ec;
+        if (parsed >= 11) menu[9].currentVal = a2;
+        if (parsed >= 12) menu[10].currentVal = al;
+        if (parsed >= 13) menu[11].currentVal = av;
+        if (parsed >= 14) menu[12].currentVal = gc;
+        if (parsed >= 15) menu[13].currentVal = ag;
+        if (parsed >= 16) menu[14].currentVal = gl;
+        if (parsed >= 17) menu[15].currentVal = bp;
+        if (parsed >= 18) menu[16].currentVal = wp;
+        if (parsed >= 19) menu[17].currentVal = rg;
+        if (parsed >= 20) menu[18].currentVal = lc;
+        if (parsed >= 21) menu[19].currentVal = hm;
+        if (parsed >= 22) menu[20].currentVal = vf;
+        if (parsed >= 23) menu[21].currentVal = dw;
+        if (parsed >= 24) menu[22].currentVal = cb;
+
         if (s) {
           s->set_framesize(s, (framesize_t)res);
           s->set_brightness(s, br);
           s->set_contrast(s, co);
-          s->set_quality(s, qty);
+          if (parsed >= 4) s->set_quality(s, qty);
+          if (parsed >= 5) s->set_saturation(s, sa);
+          if (parsed >= 6) s->set_special_effect(s, ef);
+          if (parsed >= 7) s->set_whitebal(s, wb);
+          if (parsed >= 8) s->set_awb_gain(s, aw);
+          if (parsed >= 9) s->set_wb_mode(s, wm);
+          if (parsed >= 10) s->set_exposure_ctrl(s, ec);
+          if (parsed >= 11) s->set_aec2(s, a2);
+          if (parsed >= 12) s->set_ae_level(s, al);
+          if (parsed >= 13) s->set_aec_value(s, av);
+          if (parsed >= 14) s->set_gain_ctrl(s, gc);
+          if (parsed >= 15) s->set_agc_gain(s, ag);
+          if (parsed >= 16) s->set_gainceiling(s, (gainceiling_t)gl);
+          if (parsed >= 17) s->set_bpc(s, bp);
+          if (parsed >= 18) s->set_wpc(s, wp);
+          if (parsed >= 19) s->set_raw_gma(s, rg);
+          if (parsed >= 20) s->set_lenc(s, lc);
+          if (parsed >= 21) s->set_hmirror(s, hm);
+          if (parsed >= 22) s->set_vflip(s, vf);
+          if (parsed >= 23) s->set_dcw(s, dw);
+          if (parsed >= 24) s->set_colorbar(s, cb);
         }
         
-        Serial.printf("[CAMERA] Configurada remotamente: Res=%d, Br=%d, Co=%d, Qty=%d\n", res, br, co, qty);
+        Serial.printf("[CAMERA] Configurada remotamente: Res=%d, Br=%d, Co=%d, Qty=%d, Sa=%d, Ef=%d, WB=%d\n", res, br, co, qty, sa, ef, wb);
         heltecSerial.println("CONF_ACK");
       }
     }
