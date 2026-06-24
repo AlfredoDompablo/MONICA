@@ -53,6 +53,26 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     const [cameraBrightness, setCameraBrightness] = useState<number>(0);
     const [cameraContrast, setCameraContrast] = useState<number>(1);
     const [cameraQuality, setCameraQuality] = useState<number>(14);
+    const [cameraSaturation, setCameraSaturation] = useState<number>(0);
+    const [cameraSpecialEffect, setCameraSpecialEffect] = useState<number>(0);
+    const [cameraWhitebal, setCameraWhitebal] = useState<number>(1);
+    const [cameraAwbGain, setCameraAwbGain] = useState<number>(1);
+    const [cameraWbMode, setCameraWbMode] = useState<number>(0);
+    const [cameraExposureCtrl, setCameraExposureCtrl] = useState<number>(1);
+    const [cameraAec2, setCameraAec2] = useState<number>(0);
+    const [cameraAeLevel, setCameraAeLevel] = useState<number>(0);
+    const [cameraAecValue, setCameraAecValue] = useState<number>(300);
+    const [cameraGainCtrl, setCameraGainCtrl] = useState<number>(1);
+    const [cameraAgcGain, setCameraAgcGain] = useState<number>(0);
+    const [cameraGainceiling, setCameraGainceiling] = useState<number>(0);
+    const [cameraBpc, setCameraBpc] = useState<number>(0);
+    const [cameraWpc, setCameraWpc] = useState<number>(1);
+    const [cameraRawGma, setCameraRawGma] = useState<number>(1);
+    const [cameraLenc, setCameraLenc] = useState<number>(1);
+    const [cameraHmirror, setCameraHmirror] = useState<number>(0);
+    const [cameraVflip, setCameraVflip] = useState<number>(0);
+    const [cameraDcw, setCameraDcw] = useState<number>(1);
+    const [cameraColorbar, setCameraColorbar] = useState<number>(0);
     const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
     // Cargar Logs y Comandos desde la API
@@ -96,6 +116,26 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                             if (params.brightness !== undefined) setCameraBrightness(Number(params.brightness));
                             if (params.contrast !== undefined) setCameraContrast(Number(params.contrast));
                             if (params.quality !== undefined) setCameraQuality(Number(params.quality));
+                            if (params.saturation !== undefined) setCameraSaturation(Number(params.saturation));
+                            if (params.special_effect !== undefined) setCameraSpecialEffect(Number(params.special_effect));
+                            if (params.whitebal !== undefined) setCameraWhitebal(Number(params.whitebal));
+                            if (params.awb_gain !== undefined) setCameraAwbGain(Number(params.awb_gain));
+                            if (params.wb_mode !== undefined) setCameraWbMode(Number(params.wb_mode));
+                            if (params.exposure_ctrl !== undefined) setCameraExposureCtrl(Number(params.exposure_ctrl));
+                            if (params.aec2 !== undefined) setCameraAec2(Number(params.aec2));
+                            if (params.ae_level !== undefined) setCameraAeLevel(Number(params.ae_level));
+                            if (params.aec_value !== undefined) setCameraAecValue(Number(params.aec_value));
+                            if (params.gain_ctrl !== undefined) setCameraGainCtrl(Number(params.gain_ctrl));
+                            if (params.agc_gain !== undefined) setCameraAgcGain(Number(params.agc_gain));
+                            if (params.gainceiling !== undefined) setCameraGainceiling(Number(params.gainceiling));
+                            if (params.bpc !== undefined) setCameraBpc(Number(params.bpc));
+                            if (params.wpc !== undefined) setCameraWpc(Number(params.wpc));
+                            if (params.raw_gma !== undefined) setCameraRawGma(Number(params.raw_gma));
+                            if (params.lenc !== undefined) setCameraLenc(Number(params.lenc));
+                            if (params.hmirror !== undefined) setCameraHmirror(Number(params.hmirror));
+                            if (params.vflip !== undefined) setCameraVflip(Number(params.vflip));
+                            if (params.dcw !== undefined) setCameraDcw(Number(params.dcw));
+                            if (params.colorbar !== undefined) setCameraColorbar(Number(params.colorbar));
                         }
                     }
                 }
@@ -132,7 +172,27 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                         resolution: cameraResolution,
                         brightness: cameraBrightness,
                         contrast: cameraContrast,
-                        quality: cameraQuality
+                        quality: cameraQuality,
+                        saturation: cameraSaturation,
+                        special_effect: cameraSpecialEffect,
+                        whitebal: cameraWhitebal,
+                        awb_gain: cameraAwbGain,
+                        wb_mode: cameraWbMode,
+                        exposure_ctrl: cameraExposureCtrl,
+                        aec2: cameraAec2,
+                        ae_level: cameraAeLevel,
+                        aec_value: cameraAecValue,
+                        gain_ctrl: cameraGainCtrl,
+                        agc_gain: cameraAgcGain,
+                        gainceiling: cameraGainceiling,
+                        bpc: cameraBpc,
+                        wpc: cameraWpc,
+                        raw_gma: cameraRawGma,
+                        lenc: cameraLenc,
+                        hmirror: cameraHmirror,
+                        vflip: cameraVflip,
+                        dcw: cameraDcw,
+                        colorbar: cameraColorbar
                     } : undefined
                 }),
             });
@@ -386,7 +446,8 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                     </button>
                                     
                                     {showAdvanced && (
-                                        <div className="mt-3 space-y-3 pt-3 border-t border-dashed border-gray-200 animate-fadeIn">
+                                        <div className="mt-3 space-y-4 pt-3 border-t border-dashed border-gray-200 animate-fadeIn max-h-[380px] overflow-y-auto pr-1 select-none">
+                                            {/* Calidad JPG */}
                                             <div>
                                                 <div className="flex justify-between items-center mb-1">
                                                     <label className="block text-[10px] font-bold text-gray-500">Calidad JPG (Compresión)</label>
@@ -400,9 +461,285 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                                     onChange={(e) => setCameraQuality(Number(e.target.value))}
                                                     className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 focus:outline-none"
                                                 />
-                                                <div className="flex justify-between text-[9px] text-gray-400 font-semibold mt-1">
-                                                    <span>10 (Alta Calidad)</span>
-                                                    <span>63 (Alta Compresión)</span>
+                                            </div>
+
+                                            {/* Imagen Básica */}
+                                            <div className="space-y-2.5">
+                                                <h4 className="text-[9px] font-black text-indigo-500 uppercase tracking-widest border-b pb-0.5">Ajustes de Imagen</h4>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Saturación</label>
+                                                        <select
+                                                            value={cameraSaturation}
+                                                            onChange={(e) => setCameraSaturation(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={-2}>-2 (Baja)</option>
+                                                            <option value={-1}>-1</option>
+                                                            <option value={0}>0 (Normal)</option>
+                                                            <option value={1}>+1</option>
+                                                            <option value={2}>+2 (Alta)</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Efecto Especial</label>
+                                                        <select
+                                                            value={cameraSpecialEffect}
+                                                            onChange={(e) => setCameraSpecialEffect(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>Ninguno</option>
+                                                            <option value={1}>Negativo</option>
+                                                            <option value={2}>B&N</option>
+                                                            <option value={3}>Rojizo</option>
+                                                            <option value={4}>Verdoso</option>
+                                                            <option value={5}>Azulado</option>
+                                                            <option value={6}>Sepia</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Balance de Blancos */}
+                                            <div className="space-y-2.5 pt-1">
+                                                <h4 className="text-[9px] font-black text-indigo-500 uppercase tracking-widest border-b pb-0.5">Balance de Blancos</h4>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">W. Balance</label>
+                                                        <select
+                                                            value={cameraWhitebal}
+                                                            onChange={(e) => setCameraWhitebal(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-1.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">AWB Gain</label>
+                                                        <select
+                                                            value={cameraAwbGain}
+                                                            onChange={(e) => setCameraAwbGain(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-1.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Modo WB</label>
+                                                        <select
+                                                            value={cameraWbMode}
+                                                            disabled={cameraWhitebal === 0}
+                                                            onChange={(e) => setCameraWbMode(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-1.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium disabled:opacity-50"
+                                                        >
+                                                            <option value={0}>Auto</option>
+                                                            <option value={1}>Soleado</option>
+                                                            <option value={2}>Nublado</option>
+                                                            <option value={3}>Oficina</option>
+                                                            <option value={4}>Casa</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Exposición y Ganancia */}
+                                            <div className="space-y-2.5 pt-1">
+                                                <h4 className="text-[9px] font-black text-indigo-500 uppercase tracking-widest border-b pb-0.5">Exposición y Ganancia</h4>
+                                                <div className="grid grid-cols-2 gap-3 mb-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Exp Ctrl (AEC)</label>
+                                                        <select
+                                                            value={cameraExposureCtrl}
+                                                            onChange={(e) => setCameraExposureCtrl(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>Manual</option>
+                                                            <option value={1}>Auto</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">AEC2 DSP</label>
+                                                        <select
+                                                            value={cameraAec2}
+                                                            onChange={(e) => setCameraAec2(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 mb-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Nivel AE</label>
+                                                        <select
+                                                            value={cameraAeLevel}
+                                                            onChange={(e) => setCameraAeLevel(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={-2}>-2</option>
+                                                            <option value={-1}>-1</option>
+                                                            <option value={0}>0</option>
+                                                            <option value={1}>+1</option>
+                                                            <option value={2}>+2</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Valor AEC (Manual)</label>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="1200"
+                                                            value={cameraAecValue}
+                                                            disabled={cameraExposureCtrl === 1}
+                                                            onChange={(e) => setCameraAecValue(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1 px-2 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium disabled:opacity-50 outline-none"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">AGC Ctrl</label>
+                                                        <select
+                                                            value={cameraGainCtrl}
+                                                            onChange={(e) => setCameraGainCtrl(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-1 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>Manual</option>
+                                                            <option value={1}>Auto</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Ganancia AGC</label>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="30"
+                                                            value={cameraAgcGain}
+                                                            disabled={cameraGainCtrl === 1}
+                                                            onChange={(e) => setCameraAgcGain(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1 px-1 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium disabled:opacity-50 outline-none"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Ceiling</label>
+                                                        <select
+                                                            value={cameraGainceiling}
+                                                            onChange={(e) => setCameraGainceiling(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-1 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>2X</option>
+                                                            <option value={1}>4X</option>
+                                                            <option value={2}>8X</option>
+                                                            <option value={3}>16X</option>
+                                                            <option value={4}>32X</option>
+                                                            <option value={5}>64X</option>
+                                                            <option value={6}>128X</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Procesamiento y Filtros */}
+                                            <div className="space-y-2.5 pt-1">
+                                                <h4 className="text-[9px] font-black text-indigo-500 uppercase tracking-widest border-b pb-0.5">Filtros y Orientación</h4>
+                                                <div className="grid grid-cols-2 gap-3 mb-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">BPC (Pixel Muerto)</label>
+                                                        <select
+                                                            value={cameraBpc}
+                                                            onChange={(e) => setCameraBpc(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">WPC (Pix. Ruidoso)</label>
+                                                        <select
+                                                            value={cameraWpc}
+                                                            onChange={(e) => setCameraWpc(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 mb-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Raw Gamma</label>
+                                                        <select
+                                                            value={cameraRawGma}
+                                                            onChange={(e) => setCameraRawGma(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Corrección Lente</label>
+                                                        <select
+                                                            value={cameraLenc}
+                                                            onChange={(e) => setCameraLenc(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 mb-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Espejo (H-Mirror)</label>
+                                                        <select
+                                                            value={cameraHmirror}
+                                                            onChange={(e) => setCameraHmirror(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Volteo (V-Flip)</label>
+                                                        <select
+                                                            value={cameraVflip}
+                                                            onChange={(e) => setCameraVflip(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">DCW (Downsample)</label>
+                                                        <select
+                                                            value={cameraDcw}
+                                                            onChange={(e) => setCameraDcw(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-500 mb-1">Barra de Color</label>
+                                                        <select
+                                                            value={cameraColorbar}
+                                                            onChange={(e) => setCameraColorbar(Number(e.target.value))}
+                                                            className="w-full rounded-lg border border-gray-300 py-1.5 px-2.5 text-xs focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                                        >
+                                                            <option value={0}>OFF</option>
+                                                            <option value={1}>ON</option>
+                                                        </select>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
