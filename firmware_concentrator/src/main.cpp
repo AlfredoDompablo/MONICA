@@ -1098,19 +1098,38 @@ void checkPendingCommands() {
         }
         else if (type == "CONFIG_CAMERA") {
             String paramStr = cmdObj["parameters"].as<String>();
-            int resVal = 10;
-            int brVal = 0;
-            int coVal = 1;
-            int qtyVal = 24; // default balanceado
+            int resVal = 10, brVal = 0, coVal = 1, qtyVal = 24;
+            int saVal = 0, efVal = 0, wbVal = 1, awVal = 1, wmVal = 0, ecVal = 1, a2Val = 0, alVal = 0, avVal = 300;
+            int gcVal = 1, agVal = 0, glVal = 0, bpVal = 0, wpVal = 1, rgVal = 1, lcVal = 1, hmVal = 0, vfVal = 0, dwVal = 1, cbVal = 0;
             
             if (paramStr != "null" && paramStr.length() > 0) {
-                DynamicJsonDocument paramDoc(200);
+                DynamicJsonDocument paramDoc(1024);
                 DeserializationError paramErr = deserializeJson(paramDoc, paramStr);
                 if (!paramErr) {
                     resVal = paramDoc["resolution"] | 10;
                     brVal = paramDoc["brightness"] | 0;
                     coVal = paramDoc["contrast"] | 1;
                     qtyVal = paramDoc["quality"] | 24;
+                    saVal = paramDoc["saturation"] | 0;
+                    efVal = paramDoc["special_effect"] | 0;
+                    wbVal = paramDoc["whitebal"] | 1;
+                    awVal = paramDoc["awb_gain"] | 1;
+                    wmVal = paramDoc["wb_mode"] | 0;
+                    ecVal = paramDoc["exposure_ctrl"] | 1;
+                    a2Val = paramDoc["aec2"] | 0;
+                    alVal = paramDoc["ae_level"] | 0;
+                    avVal = paramDoc["aec_value"] | 300;
+                    gcVal = paramDoc["gain_ctrl"] | 1;
+                    agVal = paramDoc["agc_gain"] | 0;
+                    glVal = paramDoc["gainceiling"] | 0;
+                    bpVal = paramDoc["bpc"] | 0;
+                    wpVal = paramDoc["wpc"] | 1;
+                    rgVal = paramDoc["raw_gma"] | 1;
+                    lcVal = paramDoc["lenc"] | 1;
+                    hmVal = paramDoc["hmirror"] | 0;
+                    vfVal = paramDoc["vflip"] | 0;
+                    dwVal = paramDoc["dcw"] | 1;
+                    cbVal = paramDoc["colorbar"] | 0;
                 }
             }
             
@@ -1130,6 +1149,26 @@ void checkPendingCommands() {
             ccp->brightness = brVal;
             ccp->contrast = coVal;
             ccp->quality = qtyVal;
+            ccp->saturation = saVal;
+            ccp->special_effect = efVal;
+            ccp->whitebal = wbVal;
+            ccp->awb_gain = awVal;
+            ccp->wb_mode = wmVal;
+            ccp->exposure_ctrl = ecVal;
+            ccp->aec2 = a2Val;
+            ccp->ae_level = alVal;
+            ccp->aec_value = avVal;
+            ccp->gain_ctrl = gcVal;
+            ccp->agc_gain = agVal;
+            ccp->gainceiling = glVal;
+            ccp->bpc = bpVal;
+            ccp->wpc = wpVal;
+            ccp->raw_gma = rgVal;
+            ccp->lenc = lcVal;
+            ccp->hmirror = hmVal;
+            ccp->vflip = vfVal;
+            ccp->dcw = dwVal;
+            ccp->colorbar = cbVal;
             
             responseReceived = false;
             targetNode = nodeNum;
