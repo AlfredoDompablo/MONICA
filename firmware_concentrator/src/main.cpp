@@ -25,8 +25,13 @@
 #include <SPI.h>
 #include <SD.h>
 #include <RadioLib.h>
+#include <PubSubClient.h>
 #include "secrets.h"
 #include "lora_protocol.h"
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
 
 // ============================================================================
 // --- DEFINICIONES DE HARDWARE DEL CONCENTRADOR ---
@@ -64,6 +69,9 @@
 void sendNetworkLog(String level, String message, String nodeId = "NODE_C");
 void updateCommandStatus(int commandId, String status, String response);
 void checkPendingCommands();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void reconnectMQTT();
+
 
 // ============================================================================
 // --- INSTANCIACIÓN DE OBJETOS GLOBALES ---
@@ -384,6 +392,11 @@ void setup() {
   
   tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
   tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+
+  // Configurar MQTT
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  reconnectMQTT();
 
   // Entrar en modo escucha de LoRa
   radio.startReceive();
@@ -1268,12 +1281,15 @@ void loop() {
   handleLoRa();
   handleSerial();
 
-  // Consultar comandos pendientes cada 5 segundos de forma no-bloqueante
-  static unsigned long lastCommandCheck = 0;
-  if (expectedSeqNum == 0 && (millis() - lastCommandCheck > 5000)) {
-      checkPendingCommands();
-      lastCommandCheck = millis();
+  // Mantener conexión MQTT activa y procesar callbacks
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) {
+      reconnectMQTT();
+    } else {
+      mqttClient.loop();
+    }
   }
+
   
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
   if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
@@ -1360,3 +1376,293 @@ void loop() {
       }
   }
 }
+
+/**
+ * @brief Recibe y procesa los comandos enviados al concentrador a través del broker MQTT.
+ */
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("[MQTT] Mensaje recibido en topic: ");
+  Serial.println(topic);
+  
+  if (expectedSeqNum > 0) {
+    Serial.println("[MQTT] Descarga de imagen LoRa activa. Comando ignorado temporalmente.");
+    return;
+  }
+
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println("[MQTT] Payload: " + message);
+
+  DynamicJsonDocument doc(2048);
+  DeserializationError error = deserializeJson(doc, message);
+  if (error) {
+    Serial.print("[MQTT] Error al deserializar JSON: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  int commandId = doc["command_id"] | 0;
+  String type = doc["type"] | "";
+  String targetNodeId = doc["target_node_id"] | "";
+
+  if (commandId == 0 || type == "" || targetNodeId == "") {
+    Serial.println("[MQTT] Datos de comando incompletos.");
+    return;
+  }
+
+  Serial.printf("[MQTT COMMAND] ID %d, Tipo %s, Destino %s\n", commandId, type.c_str(), targetNodeId.c_str());
+  sendNetworkLog("INFO", "Recibido comando MQTT " + type + " para " + targetNodeId + ". Ejecutando...", "NODE_C");
+  
+  updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa vía MQTT...");
+
+  int nodeNum = 1;
+  if (targetNodeId.startsWith("NODE_00")) {
+      nodeNum = targetNodeId.substring(7).toInt();
+  } else if (targetNodeId.startsWith("NODE_")) {
+      nodeNum = targetNodeId.substring(5).toInt();
+  }
+
+  bool success = false;
+  String responseMsg = "";
+
+  if (type == "POLL_TELEMETRY") {
+      responseReceived = false;
+      isGpsNotFixed = false;
+      currentAttempt = 1;
+      requestSentTime = millis();
+      currentTimeout = 3500;
+      pollState = POLL_STATE_WAITING_RESPONSE;
+      targetNode = nodeNum;
+      pollForImage = false;
+      
+      pollNode(nodeNum, CMD_REQ_TELEMETRY);
+      
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 4000) {
+          smartDelay(10);
+          handleLoRa();
+          if (responseReceived) {
+              if (isGpsNotFixed) {
+                  success = false;
+                  responseMsg = "El nodo no tiene señal fija de GPS. Re-intentar más tarde.";
+              } else {
+                  success = true;
+                  responseMsg = "Telemetría recibida con éxito.";
+              }
+              break;
+          }
+      }
+      if (!success && responseMsg == "") {
+          responseMsg = "Timeout: No se recibió respuesta de telemetría LoRa.";
+      }
+      
+      updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+      if (success) {
+          sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+      } else {
+          sendNetworkLog("WARNING", "Fallo al ejecutar comando " + type + ": " + responseMsg, targetNodeId);
+      }
+  } 
+  else if (type == "POLL_IMAGE") {
+      responseReceived = false;
+      currentAttempt = 1;
+      requestSentTime = millis();
+      currentTimeout = 6000;
+      pollState = POLL_STATE_WAITING_RESPONSE;
+      targetNode = nodeNum;
+      pollForImage = true;
+      
+      activeImageCommandId = commandId;
+      
+      pollNode(nodeNum, CMD_REQ_IMAGE);
+      
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 7000) {
+          smartDelay(10);
+          handleLoRa();
+          if (expectedSeqNum > 0 || responseReceived) {
+              success = true;
+              responseMsg = "Disparo exitoso. Descargando imagen...";
+              break;
+          }
+      }
+      if (!success) {
+          responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
+          updateCommandStatus(commandId, "FAILED", responseMsg);
+          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+          activeImageCommandId = 0;
+      } else {
+          updateCommandStatus(commandId, "PROCESSING", "Iniciando recepción de fragmentos de imagen...");
+          sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
+      }
+  }
+  else if (type == "CONFIG_CAMERA") {
+      JsonObject paramDoc = doc["parameters"];
+      int resVal = 10, brVal = 0, coVal = 1, qtyVal = 24;
+      int saVal = 0, efVal = 0, wbVal = 1, awVal = 1, wmVal = 0, ecVal = 1, a2Val = 0, alVal = 0, avVal = 300;
+      int gcVal = 1, agVal = 0, glVal = 0, bpVal = 0, wpVal = 1, rgVal = 1, lcVal = 1, hmVal = 0, vfVal = 0, dwVal = 1, cbVal = 0;
+      
+      if (!paramDoc.isNull()) {
+          resVal = paramDoc["resolution"] | 10;
+          brVal = paramDoc["brightness"] | 0;
+          coVal = paramDoc["contrast"] | 1;
+          qtyVal = paramDoc["quality"] | 24;
+          saVal = paramDoc["saturation"] | 0;
+          efVal = paramDoc["special_effect"] | 0;
+          wbVal = paramDoc["whitebal"] | 1;
+          awVal = paramDoc["awb_gain"] | 1;
+          wmVal = paramDoc["wb_mode"] | 0;
+          ecVal = paramDoc["exposure_ctrl"] | 1;
+          a2Val = paramDoc["aec2"] | 0;
+          alVal = paramDoc["ae_level"] | 0;
+          avVal = paramDoc["aec_value"] | 300;
+          gcVal = paramDoc["gain_ctrl"] | 1;
+          agVal = paramDoc["agc_gain"] | 0;
+          glVal = paramDoc["gainceiling"] | 0;
+          bpVal = paramDoc["bpc"] | 0;
+          wpVal = paramDoc["wpc"] | 1;
+          rgVal = paramDoc["raw_gma"] | 1;
+          lcVal = paramDoc["lenc"] | 1;
+          hmVal = paramDoc["hmirror"] | 0;
+          vfVal = paramDoc["vflip"] | 0;
+          dwVal = paramDoc["dcw"] | 1;
+          cbVal = paramDoc["colorbar"] | 0;
+      }
+      
+      LoRaPacket packet;
+      memset(&packet, 0, sizeof(LoRaHeader));
+      packet.header.syncWord[0] = LORA_SYNC_0;
+      packet.header.syncWord[1] = LORA_SYNC_1;
+      packet.header.srcId = MY_NODE_ID; 
+      packet.header.destId = nodeNum;
+      packet.header.nextHopId = 1; 
+      packet.header.type = CMD_CONFIG_CAM;
+      packet.header.seqNum = packetSequence++;
+      packet.header.ttl = 5;
+      
+      CameraConfigPayload* ccp = (CameraConfigPayload*)packet.payload;
+      ccp->resolution = resVal;
+      ccp->brightness = brVal;
+      ccp->contrast = coVal;
+      ccp->quality = qtyVal;
+      ccp->saturation = saVal;
+      ccp->special_effect = efVal;
+      ccp->whitebal = wbVal;
+      ccp->awb_gain = awVal;
+      ccp->wb_mode = wmVal;
+      ccp->exposure_ctrl = ecVal;
+      ccp->aec2 = a2Val;
+      ccp->ae_level = alVal;
+      ccp->aec_value = avVal;
+      ccp->gain_ctrl = gcVal;
+      ccp->agc_gain = agVal;
+      ccp->gainceiling = glVal;
+      ccp->bpc = bpVal;
+      ccp->wpc = wpVal;
+      ccp->raw_gma = rgVal;
+      ccp->lenc = lcVal;
+      ccp->hmirror = hmVal;
+      ccp->vflip = vfVal;
+      ccp->dcw = dwVal;
+      ccp->colorbar = cbVal;
+      
+      responseReceived = false;
+      targetNode = nodeNum;
+      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+      radio.startReceive();
+      
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 4000) {
+          smartDelay(10);
+          handleLoRa();
+          if (responseReceived) {
+              success = true;
+              responseMsg = "Configuración de cámara aplicada con éxito.";
+              break;
+          }
+      }
+      if (!success) {
+          responseMsg = "Timeout: Sin confirmación ACK del nodo sensor.";
+      }
+      
+      updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+      if (success) {
+          sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+      } else {
+          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+      }
+  }
+  else if (type == "PING") {
+      LoRaPacket packet;
+      memset(&packet, 0, sizeof(LoRaHeader));
+      packet.header.syncWord[0] = LORA_SYNC_0;
+      packet.header.syncWord[1] = LORA_SYNC_1;
+      packet.header.srcId = MY_NODE_ID; 
+      packet.header.destId = nodeNum;
+      packet.header.nextHopId = 1; 
+      packet.header.type = CMD_PING;
+      packet.header.seqNum = packetSequence++;
+      packet.header.ttl = 5;
+      
+      responseReceived = false;
+      targetNode = nodeNum;
+      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+      radio.startReceive();
+      
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 3000) {
+          smartDelay(10);
+          handleLoRa();
+          if (responseReceived) {
+              success = true;
+              responseMsg = "Ping LoRa exitoso. Nodo activo.";
+              break;
+          }
+      }
+      if (!success) {
+          responseMsg = "Fallo de conexión: Sin respuesta de ping LoRa.";
+      }
+      
+      updateCommandStatus(commandId, success ? "COMPLETED" : "FAILED", responseMsg);
+      if (success) {
+          sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+      } else {
+          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+      }
+  }
+  else {
+      responseMsg = "Comando desconocido o no soportado.";
+      updateCommandStatus(commandId, "FAILED", responseMsg);
+      sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+  }
+  
+  pollState = POLL_STATE_IDLE;
+  lastPollTime = millis();
+}
+
+/**
+ * @brief Gestiona la conexión y reconexión automática al Broker MQTT.
+ */
+void reconnectMQTT() {
+  static unsigned long lastReconnectAttempt = 0;
+  if (!mqttClient.connected()) {
+    unsigned long now = millis();
+    if (now - lastReconnectAttempt > 5000) {
+      lastReconnectAttempt = now;
+      Serial.println("[MQTT] Intentando conexión al Broker...");
+      
+      String clientId = "MonicaGateway-" + String(random(0xffff), HEX);
+      if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
+        Serial.println("[MQTT] Conectado con éxito.");
+        mqttClient.subscribe("monica/commands");
+        sendNetworkLog("INFO", "Concentrador conectado al Broker MQTT local.", "NODE_C");
+      } else {
+        Serial.print("[MQTT] Falló conexión, rc=");
+        Serial.println(mqttClient.state());
+      }
+    }
+  }
+}
+
