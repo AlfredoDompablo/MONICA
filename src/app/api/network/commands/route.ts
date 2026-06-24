@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { type NextRequest } from 'next/server';
 import crypto from 'crypto';
+import mqtt from 'mqtt';
+
 
 /**
  * GET /api/network/commands
@@ -94,6 +96,39 @@ export async function POST(request: Request) {
                 timestamp: new Date(),
             }
         });
+
+        // Publicar el comando en MQTT de forma no-bloqueante/asíncrona
+        try {
+            const brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://127.0.0.1:1883';
+            const mqttUser = process.env.MQTT_USER;
+            const mqttPass = process.env.MQTT_PASS;
+
+            const client = mqtt.connect(brokerUrl, {
+                username: mqttUser,
+                password: mqttPass,
+                connectTimeout: 2000,
+            });
+
+            client.on('connect', () => {
+                const message = JSON.stringify({
+                    command_id: newCommand.command_id,
+                    type: newCommand.type,
+                    target_node_id: newCommand.target_node_id,
+                    parameters: parameters || null,
+                });
+                client.publish('monica/commands', message, { qos: 1 }, () => {
+                    console.log(`[MQTT] Publicado comando ${newCommand.command_id} a monica/commands`);
+                    client.end();
+                });
+            });
+
+            client.on('error', (err) => {
+                console.error('[MQTT] Error conectando al broker:', err);
+                client.end();
+            });
+        } catch (mqttErr) {
+            console.error('[MQTT] Fallo al publicar comando:', mqttErr);
+        }
 
         return NextResponse.json(newCommand, { status: 201 });
     } catch (error) {
