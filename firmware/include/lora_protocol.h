@@ -90,7 +90,7 @@ struct CameraConfigPayload {
 };
 
 // MTU Seguro para LoRa
-#define LORA_MAX_PAYLOAD 200
+#define LORA_MAX_PAYLOAD 240
 
 // Paquete genérico de transmisión
 struct LoRaPacket {
