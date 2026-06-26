@@ -1,93 +1,128 @@
 /**
  * @file main.cpp
- * @brief Firmware de Producción - Edición LIGHT (Compacta/Autónoma) para la Cámara ESP32-CAM.
- * 
- * Esta versión está específicamente diseñada para nodos remotos de bajo consumo que no requieren
- * una pantalla OLED de diagnóstico local ni un encoder rotativo. Se enfoca exclusivamente en
- * proporcionar la comunicación UART de alta velocidad de captura de imagen OV2640/OV5640 de la manera
- * más liviana y eficiente en términos de ciclos de reloj y ahorro de energía de batería.
- * 
+ * @brief Firmware de Producción - Edición LIGHT (Compacta/Autónoma) para la
+ * Cámara ESP32-CAM.
+ *
+ * Esta versión está específicamente diseñada para nodos remotos de bajo consumo
+ * que no requieren una pantalla OLED de diagnóstico local ni un encoder
+ * rotativo. Se enfoca exclusivamente en proporcionar la comunicación UART de
+ * alta velocidad de captura de imagen OV2640/OV5640 de la manera más liviana y
+ * eficiente en términos de ciclos de reloj y ahorro de energía de batería.
+ *
  * Protocolo de Comandos Soportado a través de UART:
- *  - "TAKE_PIC"                    ➡️ Dispara la cámara y captura un frame JPG en PSRAM.
- *  - "GET_CHUNK <offset> <len>"    ➡️ Lee y transmite dinámicamente un fragmento binario de la imagen.
- *  - "RELEASE_PIC"                 ➡️ Libera el búfer de captura en PSRAM para conservar energía.
- *  - "SET_RES <val>"               ➡️ Configura dinámicamente la resolución de imagen deseada (0 al 21).
- * 
+ *  - "TAKE_PIC"                    ➡️ Dispara la cámara y captura un frame JPG
+ * en PSRAM.
+ *  - "GET_CHUNK <offset> <len>"    ➡️ Lee y transmite dinámicamente un fragmento
+ * binario de la imagen.
+ *  - "RELEASE_PIC"                 ➡️ Libera el búfer de captura en PSRAM para
+ * conservar energía.
+ *  - "SET_RES <val>"               ➡️ Configura dinámicamente la resolución de
+ * imagen deseada (0 al 21).
+ *
  * Diseñado y documentado profesionalmente para robustez industrial.
  */
 
-#include <Arduino.h>
 #include "esp_camera.h"
+#include <Arduino.h>
 
 // ============================================================================
 // --- ASIGNACIÓN DE PINES DE LA CÁMARA (Freenove ESP32-S3 Cam Board) ---
 // ============================================================================
-#define PWDN_GPIO_NUM     -1  ///< Pin de apagado por hardware (No disponible en este modelo)
-#define RESET_GPIO_NUM    -1  ///< Pin de reinicio por hardware (No disponible en este modelo)
-#define XCLK_GPIO_NUM     15  ///< Entrada de reloj del sistema para el sensor de la cámara
-#define SIOD_GPIO_NUM     4   ///< Bus de datos SCCB (Equivalente a SDA de I2C)
-#define SIOC_GPIO_NUM     5   ///< Bus de reloj SCCB (Equivalente a SCL de I2C)
-#define Y9_GPIO_NUM       16  ///< Bit de datos 9 del bus paralelo de imagen
-#define Y8_GPIO_NUM       17  ///< Bit de datos 8 del bus paralelo de imagen
-#define Y7_GPIO_NUM       18  ///< Bit de datos 7 del bus paralelo de imagen
-#define Y6_GPIO_NUM       12  ///< Bit de datos 6 del bus paralelo de imagen
-#define Y5_GPIO_NUM       10  ///< Bit de datos 5 del bus paralelo de imagen
-#define Y4_GPIO_NUM       8   ///< Bit de datos 4 del bus paralelo de imagen
-#define Y3_GPIO_NUM       9   ///< Bit de datos 3 del bus paralelo de imagen
-#define Y2_GPIO_NUM       11  ///< Bit de datos 2 del bus paralelo de imagen
-#define VSYNC_GPIO_NUM    6   ///< Pin de sincronización vertical (Inicio de Frame)
-#define HREF_GPIO_NUM     7   ///< Pin de referencia horizontal (Línea Activa)
-#define PCLK_GPIO_NUM     13  ///< Pin de reloj de píxeles (Pixel Clock)
+#define PWDN_GPIO_NUM                                                          \
+  -1 ///< Pin de apagado por hardware (No disponible en este modelo)
+#define RESET_GPIO_NUM                                                         \
+  -1 ///< Pin de reinicio por hardware (No disponible en este modelo)
+#define XCLK_GPIO_NUM                                                          \
+  15 ///< Entrada de reloj del sistema para el sensor de la cámara
+#define SIOD_GPIO_NUM 4  ///< Bus de datos SCCB (Equivalente a SDA de I2C)
+#define SIOC_GPIO_NUM 5  ///< Bus de reloj SCCB (Equivalente a SCL de I2C)
+#define Y9_GPIO_NUM 16   ///< Bit de datos 9 del bus paralelo de imagen
+#define Y8_GPIO_NUM 17   ///< Bit de datos 8 del bus paralelo de imagen
+#define Y7_GPIO_NUM 18   ///< Bit de datos 7 del bus paralelo de imagen
+#define Y6_GPIO_NUM 12   ///< Bit de datos 6 del bus paralelo de imagen
+#define Y5_GPIO_NUM 10   ///< Bit de datos 5 del bus paralelo de imagen
+#define Y4_GPIO_NUM 8    ///< Bit de datos 4 del bus paralelo de imagen
+#define Y3_GPIO_NUM 9    ///< Bit de datos 3 del bus paralelo de imagen
+#define Y2_GPIO_NUM 11   ///< Bit de datos 2 del bus paralelo de imagen
+#define VSYNC_GPIO_NUM 6 ///< Pin de sincronización vertical (Inicio de Frame)
+#define HREF_GPIO_NUM 7  ///< Pin de referencia horizontal (Línea Activa)
+#define PCLK_GPIO_NUM 13 ///< Pin de reloj de píxeles (Pixel Clock)
 
 // ============================================================================
 // --- CONEXIÓN DE COMUNICACIÓN SERIE UART CON MASTER MCU (Heltec) ---
 // ============================================================================
-#define HELTEC_UART_RX 41     ///< Pin RX para recibir comandos desde el Heltec
-#define HELTEC_UART_TX 42     ///< Pin TX para enviar respuestas y bytes de imagen
-HardwareSerial heltecSerial(1); ///< Canal de hardware UART1 para aislar logs del puerto USB
+#define HELTEC_UART_RX 41 ///< Pin RX para recibir comandos desde el Heltec
+#define HELTEC_UART_TX 42 ///< Pin TX para enviar respuestas y bytes de imagen
+HardwareSerial heltecSerial(
+    1); ///< Canal de hardware UART1 para aislar logs del puerto USB
 
 // ============================================================================
 // --- VARIABLES DE ESTADO GLOBAL ---
 // ============================================================================
-sensor_t * s = NULL;              ///< Puntero al controlador del sensor físico de la cámara
-camera_fb_t * currentFb = NULL;   ///< Frame buffer que retiene el frame capturado en PSRAM
+sensor_t *s = NULL; ///< Puntero al controlador del sensor físico de la cámara
+camera_fb_t *currentFb =
+    NULL; ///< Frame buffer que retiene el frame capturado en PSRAM
 
 /**
  * @brief Resolución de captura JPEG inicial por defecto.
  * 21 representa FRAMESIZE_QSXGA (2560x1920) para el sensor OV5640.
  */
-int currentFrameSize = 21; 
+int currentFrameSize = 21;
 
 /**
- * @brief Obtiene la cadena de texto legible de una resolución basada en su índice.
+ * @brief Obtiene la cadena de texto legible de una resolución basada en su
+ * índice.
  * @param val Índice entero de la resolución (0 a 21).
  * @return Nombre descriptivo de la resolución.
  */
-const char* getFrameSizeName(int val) {
-  switch(val) {
-    case 0: return "96x96";
-    case 1: return "QQVGA";
-    case 2: return "QCIF";
-    case 3: return "HQVGA";
-    case 4: return "240x240";
-    case 5: return "QVGA";
-    case 6: return "CIF";
-    case 7: return "HVGA";
-    case 8: return "VGA";
-    case 9: return "SVGA";
-    case 10: return "XGA";
-    case 11: return "HD";
-    case 12: return "SXGA";
-    case 13: return "UXGA";
-    case 14: return "FHD";
-    case 15: return "P_HD";
-    case 16: return "P_3MP";
-    case 17: return "QXGA";
-    case 18: return "QHD";
-    case 19: return "WQXGA";
-    case 20: return "P_FHD";
-    case 21: return "QSXGA";
-    default: return "INV";
+const char *getFrameSizeName(int val) {
+  switch (val) {
+  case 0:
+    return "96x96";
+  case 1:
+    return "QQVGA";
+  case 2:
+    return "QCIF";
+  case 3:
+    return "HQVGA";
+  case 4:
+    return "240x240";
+  case 5:
+    return "QVGA";
+  case 6:
+    return "CIF";
+  case 7:
+    return "HVGA";
+  case 8:
+    return "VGA";
+  case 9:
+    return "SVGA";
+  case 10:
+    return "XGA";
+  case 11:
+    return "HD";
+  case 12:
+    return "SXGA";
+  case 13:
+    return "UXGA";
+  case 14:
+    return "FHD";
+  case 15:
+    return "P_HD";
+  case 16:
+    return "P_3MP";
+  case 17:
+    return "QXGA";
+  case 18:
+    return "QHD";
+  case 19:
+    return "WQXGA";
+  case 20:
+    return "P_FHD";
+  case 21:
+    return "QSXGA";
+  default:
+    return "INV";
   }
 }
 
@@ -98,9 +133,10 @@ void takeAndSendPhoto();
  */
 void setup() {
   Serial.begin(115200); ///< Puerto serie USB para depuración local
-  Serial.println("\n[SISTEMA] Iniciando firmware de camara (Version LIGHT Standalone)...");
+  Serial.println(
+      "\n[SISTEMA] Iniciando firmware de camara (Version LIGHT Standalone)...");
   Serial.flush();
-  
+
   // Iniciar la UART serie dedicada para interactuar con el nodo maestro Heltec
   heltecSerial.begin(115200, SERIAL_8N1, HELTEC_UART_RX, HELTEC_UART_TX);
 
@@ -124,24 +160,31 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  
+
   // Configuración del reloj de reloj externo (XCLK).
-  // Ajustado a 10MHz para máxima estabilidad de comunicación serial en sensores OV5640
-  config.xclk_freq_hz = 10000000;  
+  // Ajustado a 10MHz para máxima estabilidad de comunicación serial en sensores
+  // OV5640
+  config.xclk_freq_hz = 10000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  
-  // Asignar el búfer físico dinámicamente dependiendo de la presencia de memoria PSRAM externa
-  if(psramFound()){
-    Serial.println("[INFO] PSRAM detectada. Habilitando soporte para resoluciones ultra altas.");
-    config.frame_size = FRAMESIZE_QSXGA; ///< Permite escalamientos dinámicos hasta 5 MegaPíxeles
-    config.jpeg_quality = 24;            ///< Calidad de imagen JPEG inicial balanceada (24)
-    config.fb_count = 1;                 ///< Búfer único para minimizar la huella de memoria PSRAM
+
+  // Asignar el búfer físico dinámicamente dependiendo de la presencia de
+  // memoria PSRAM externa
+  if (psramFound()) {
+    Serial.println("[INFO] PSRAM detectada. Habilitando soporte para "
+                   "resoluciones ultra altas.");
+    config.frame_size = FRAMESIZE_QSXGA; ///< Permite escalamientos dinámicos
+                                         ///< hasta 5 MegaPíxeles
+    config.jpeg_quality =
+        14; ///< Calidad de imagen JPEG inicial balanceada (24)
+    config.fb_count =
+        1; ///< Búfer único para minimizar la huella de memoria PSRAM
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
-    Serial.println("[WARNING] No se encontró PSRAM. Usando DRAM interna (Limitado a VGA).");
+    Serial.println("[WARNING] No se encontró PSRAM. Usando DRAM interna "
+                   "(Limitado a VGA).");
     config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 24;
+    config.jpeg_quality = 12;
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
@@ -155,23 +198,24 @@ void setup() {
 
   // Obtener el puntero para manipular registros del sensor directamente
   s = esp_camera_sensor_get();
-  
+
   // Forzar la resolución inicial segura (limitar a VGA si no hay PSRAM)
   if (!psramFound() && currentFrameSize > 8) {
-    currentFrameSize = 8; 
+    currentFrameSize = 8;
   }
   s->set_framesize(s, (framesize_t)currentFrameSize);
 
   // Configuración de parámetros de imagen por defecto
-  s->set_vflip(s, 0); 
-  s->set_brightness(s, 0); 
-  s->set_saturation(s, 0); 
+  s->set_vflip(s, 0);
+  s->set_brightness(s, 0);
+  s->set_saturation(s, 0);
   s->set_whitebal(s, 1);
   s->set_awb_gain(s, 1);
   s->set_wb_mode(s, 0);
   s->set_contrast(s, 1);
 
-  Serial.println("[SISTEMA] Inicialización de cámara completada. Esperando comandos...");
+  Serial.println(
+      "[SISTEMA] Inicialización de cámara completada. Esperando comandos...");
 }
 
 /**
@@ -183,25 +227,27 @@ void loop() {
     // Leer el comando delimitado por nueva línea (\n)
     String cmd = heltecSerial.readStringUntil('\n');
     cmd.trim();
-    
+
     // ------------------------------------------------------------------------
     // COMANDO: GET_CHUNK <offset> <len>
-    // Retorna una ráfaga binaria del buffer JPG actual a partir del desplazamiento.
+    // Retorna una ráfaga binaria del buffer JPG actual a partir del
+    // desplazamiento.
     // ------------------------------------------------------------------------
     if (cmd.startsWith("GET_CHUNK")) {
       int firstSpace = cmd.indexOf(' ');
       int secondSpace = cmd.indexOf(' ', firstSpace + 1);
-      
+
       if (firstSpace != -1 && secondSpace != -1) {
         uint32_t offset = cmd.substring(firstSpace + 1, secondSpace).toInt();
         uint32_t len = cmd.substring(secondSpace + 1).toInt();
-        
+
         // Escribir bytes en binario crudo por la UART
         if (currentFb && offset + len <= currentFb->len) {
           heltecSerial.write(currentFb->buf + offset, len);
         } else {
-          // Búfer defensivo: rellenar con ceros ante errores para no congelar la UART receptora
-          uint8_t* zeroBuf = (uint8_t*)calloc(len, 1);
+          // Búfer defensivo: rellenar con ceros ante errores para no congelar
+          // la UART receptora
+          uint8_t *zeroBuf = (uint8_t *)calloc(len, 1);
           if (zeroBuf) {
             heltecSerial.write(zeroBuf, len);
             free(zeroBuf);
@@ -218,7 +264,8 @@ void loop() {
     }
     // ------------------------------------------------------------------------
     // COMANDO: RELEASE_PIC
-    // Libera el frame buffer retenido en memoria para optimizar corriente de fuga.
+    // Libera el frame buffer retenido en memoria para optimizar corriente de
+    // fuga.
     // ------------------------------------------------------------------------
     else if (cmd == "RELEASE_PIC") {
       if (currentFb) {
@@ -239,81 +286,136 @@ void loop() {
           currentFrameSize = val;
           if (s) {
             s->set_framesize(s, (framesize_t)currentFrameSize);
-            Serial.printf("[INFO] Resolución cambiada dinámicamente a %s (%d)\n", getFrameSizeName(currentFrameSize), currentFrameSize);
+            Serial.printf(
+                "[INFO] Resolución cambiada dinámicamente a %s (%d)\n",
+                getFrameSizeName(currentFrameSize), currentFrameSize);
           }
         } else {
-          Serial.printf("[ERROR] Valor de resolución inválido: %d (Rango esperado: 0-21)\n", val);
+          Serial.printf("[ERROR] Valor de resolución inválido: %d (Rango "
+                        "esperado: 0-21)\n",
+                        val);
         }
       }
     }
     // ------------------------------------------------------------------------
-    // COMANDO: SET_CONFIG <res> <br> <co> <qty> <sa> <ef> <wb> <aw> <wm> <ec> <a2> <al> <av> <gc> <ag> <gl> <bp> <wp> <rg> <lc> <hm> <vf> <dw> <cb>
+    // COMANDO: SET_CONFIG <res> <br> <co> <qty> <sa> <ef> <wb> <aw> <wm> <ec>
+    // <a2> <al> <av> <gc> <ag> <gl> <bp> <wp> <rg> <lc> <hm> <vf> <dw> <cb>
     // Configura todos los parámetros del sensor.
     // ------------------------------------------------------------------------
     else if (cmd.startsWith("SET_CONFIG")) {
       int res = 10, br = 0, co = 1, qty = 24;
-      int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0, al = 0, av = 300;
-      int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1, hm = 0, vf = 0, dw = 1, cb = 0;
-      
-      int parsed = sscanf(cmd.c_str() + 11, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
-                          &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm, &ec, &a2, &al, &av, &gc, &ag, &gl, &bp, &wp, &rg, &lc, &hm, &vf, &dw, &cb);
-      
+      int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0, al = 0,
+          av = 300;
+      int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1, hm = 0,
+          vf = 0, dw = 1, cb = 0;
+
+      int parsed =
+          sscanf(cmd.c_str() + 11,
+                 "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
+                 "%d %d %d %d",
+                 &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm, &ec, &a2, &al,
+                 &av, &gc, &ag, &gl, &bp, &wp, &rg, &lc, &hm, &vf, &dw, &cb);
+
       if (parsed >= 3) {
         res = constrain(res, 0, 21);
         br = constrain(br, -2, 2);
         co = constrain(co, -2, 2);
-        if (parsed >= 4) qty = constrain(qty, 10, 63);
-        if (parsed >= 5) sa = constrain(sa, -2, 2);
-        if (parsed >= 6) ef = constrain(ef, 0, 6);
-        if (parsed >= 7) wb = constrain(wb, 0, 1);
-        if (parsed >= 8) aw = constrain(aw, 0, 1);
-        if (parsed >= 9) wm = constrain(wm, 0, 4);
-        if (parsed >= 10) ec = constrain(ec, 0, 1);
-        if (parsed >= 11) a2 = constrain(a2, 0, 1);
-        if (parsed >= 12) al = constrain(al, -2, 2);
-        if (parsed >= 13) av = constrain(av, 0, 1200);
-        if (parsed >= 14) gc = constrain(gc, 0, 1);
-        if (parsed >= 15) ag = constrain(ag, 0, 30);
-        if (parsed >= 16) gl = constrain(gl, 0, 6);
-        if (parsed >= 17) bp = constrain(bp, 0, 1);
-        if (parsed >= 18) wp = constrain(wp, 0, 1);
-        if (parsed >= 19) rg = constrain(rg, 0, 1);
-        if (parsed >= 20) lc = constrain(lc, 0, 1);
-        if (parsed >= 21) hm = constrain(hm, 0, 1);
-        if (parsed >= 22) vf = constrain(vf, 0, 1);
-        if (parsed >= 23) dw = constrain(dw, 0, 1);
-        if (parsed >= 24) cb = constrain(cb, 0, 1);
-        
+        if (parsed >= 4)
+          qty = constrain(qty, 10, 63);
+        if (parsed >= 5)
+          sa = constrain(sa, -2, 2);
+        if (parsed >= 6)
+          ef = constrain(ef, 0, 6);
+        if (parsed >= 7)
+          wb = constrain(wb, 0, 1);
+        if (parsed >= 8)
+          aw = constrain(aw, 0, 1);
+        if (parsed >= 9)
+          wm = constrain(wm, 0, 4);
+        if (parsed >= 10)
+          ec = constrain(ec, 0, 1);
+        if (parsed >= 11)
+          a2 = constrain(a2, 0, 1);
+        if (parsed >= 12)
+          al = constrain(al, -2, 2);
+        if (parsed >= 13)
+          av = constrain(av, 0, 1200);
+        if (parsed >= 14)
+          gc = constrain(gc, 0, 1);
+        if (parsed >= 15)
+          ag = constrain(ag, 0, 30);
+        if (parsed >= 16)
+          gl = constrain(gl, 0, 6);
+        if (parsed >= 17)
+          bp = constrain(bp, 0, 1);
+        if (parsed >= 18)
+          wp = constrain(wp, 0, 1);
+        if (parsed >= 19)
+          rg = constrain(rg, 0, 1);
+        if (parsed >= 20)
+          lc = constrain(lc, 0, 1);
+        if (parsed >= 21)
+          hm = constrain(hm, 0, 1);
+        if (parsed >= 22)
+          vf = constrain(vf, 0, 1);
+        if (parsed >= 23)
+          dw = constrain(dw, 0, 1);
+        if (parsed >= 24)
+          cb = constrain(cb, 0, 1);
+
         currentFrameSize = res;
-        
+
         if (s) {
           s->set_framesize(s, (framesize_t)res);
           s->set_brightness(s, br);
           s->set_contrast(s, co);
-          if (parsed >= 4) s->set_quality(s, qty);
-          if (parsed >= 5) s->set_saturation(s, sa);
-          if (parsed >= 6) s->set_special_effect(s, ef);
-          if (parsed >= 7) s->set_whitebal(s, wb);
-          if (parsed >= 8) s->set_awb_gain(s, aw);
-          if (parsed >= 9) s->set_wb_mode(s, wm);
-          if (parsed >= 10) s->set_exposure_ctrl(s, ec);
-          if (parsed >= 11) s->set_aec2(s, a2);
-          if (parsed >= 12) s->set_ae_level(s, al);
-          if (parsed >= 13) s->set_aec_value(s, av);
-          if (parsed >= 14) s->set_gain_ctrl(s, gc);
-          if (parsed >= 15) s->set_agc_gain(s, ag);
-          if (parsed >= 16) s->set_gainceiling(s, (gainceiling_t)gl);
-          if (parsed >= 17) s->set_bpc(s, bp);
-          if (parsed >= 18) s->set_wpc(s, wp);
-          if (parsed >= 19) s->set_raw_gma(s, rg);
-          if (parsed >= 20) s->set_lenc(s, lc);
-          if (parsed >= 21) s->set_hmirror(s, hm);
-          if (parsed >= 22) s->set_vflip(s, vf);
-          if (parsed >= 23) s->set_dcw(s, dw);
-          if (parsed >= 24) s->set_colorbar(s, cb);
+          if (parsed >= 4)
+            s->set_quality(s, qty);
+          if (parsed >= 5)
+            s->set_saturation(s, sa);
+          if (parsed >= 6)
+            s->set_special_effect(s, ef);
+          if (parsed >= 7)
+            s->set_whitebal(s, wb);
+          if (parsed >= 8)
+            s->set_awb_gain(s, aw);
+          if (parsed >= 9)
+            s->set_wb_mode(s, wm);
+          if (parsed >= 10)
+            s->set_exposure_ctrl(s, ec);
+          if (parsed >= 11)
+            s->set_aec2(s, a2);
+          if (parsed >= 12)
+            s->set_ae_level(s, al);
+          if (parsed >= 13)
+            s->set_aec_value(s, av);
+          if (parsed >= 14)
+            s->set_gain_ctrl(s, gc);
+          if (parsed >= 15)
+            s->set_agc_gain(s, ag);
+          if (parsed >= 16)
+            s->set_gainceiling(s, (gainceiling_t)gl);
+          if (parsed >= 17)
+            s->set_bpc(s, bp);
+          if (parsed >= 18)
+            s->set_wpc(s, wp);
+          if (parsed >= 19)
+            s->set_raw_gma(s, rg);
+          if (parsed >= 20)
+            s->set_lenc(s, lc);
+          if (parsed >= 21)
+            s->set_hmirror(s, hm);
+          if (parsed >= 22)
+            s->set_vflip(s, vf);
+          if (parsed >= 23)
+            s->set_dcw(s, dw);
+          if (parsed >= 24)
+            s->set_colorbar(s, cb);
         }
-        
-        Serial.printf("[CAMERA] Configurada remotamente (LIGHT): Res=%d, Br=%d, Co=%d, Qty=%d, Sa=%d, Ef=%d\n", res, br, co, qty, sa, ef);
+
+        Serial.printf("[CAMERA] Configurada remotamente (LIGHT): Res=%d, "
+                      "Br=%d, Co=%d, Qty=%d, Sa=%d, Ef=%d\n",
+                      res, br, co, qty, sa, ef);
         heltecSerial.println("CONF_ACK");
       }
     }
@@ -322,17 +424,21 @@ void loop() {
 
 /**
  * @brief Dispara el sensor CMOS y captura un cuadro de imagen retenido en RAM.
- * 
+ *
  * Flujo de ejecución:
  *  1. Libera búferes obsoletos de capturas previas.
- *  2. Realiza 4 capturas dummy consecutivas para permitir que los lazos de control
- *     de ganancia automática (AGC) y exposición (AEC) del sensor OV5640 se estabilicen.
+ *  2. Realiza 4 capturas dummy consecutivas para permitir que los lazos de
+ * control de ganancia automática (AGC) y exposición (AEC) del sensor OV5640 se
+ * estabilicen.
  *  3. Ejecuta la lectura final en PSRAM.
- *  4. Valida el marcador binario de fin de JPEG (End of Image - EOI: `0xFF 0xD9`).
+ *  4. Valida el marcador binario de fin de JPEG (End of Image - EOI: `0xFF
+ * 0xD9`).
  *  5. Envía la respuesta formateada `SIZE:<bytes>\n` a través del puerto serie.
  */
 void takeAndSendPhoto() {
-  Serial.printf("[INFO] Petición TAKE_PIC recibida. Capturando en resolución %s...\n", getFrameSizeName(currentFrameSize));
+  Serial.printf(
+      "[INFO] Petición TAKE_PIC recibida. Capturando en resolución %s...\n",
+      getFrameSizeName(currentFrameSize));
 
   // Limpiar referencias anteriores
   if (currentFb) {
@@ -340,45 +446,53 @@ void takeAndSendPhoto() {
     currentFb = NULL;
   }
 
-  // Capturas de descarte para estabilización automática de brillo y ganancia del lente CMOS
+  // Capturas de descarte para estabilización automática de brillo y ganancia
+  // del lente CMOS
   for (int i = 0; i < 4; i++) {
-    camera_fb_t * fb = esp_camera_fb_get();
+    camera_fb_t *fb = esp_camera_fb_get();
     if (fb) {
       esp_camera_fb_return(fb);
     }
-    delay(80); 
+    delay(80);
   }
 
   // Captura del cuadro final útil
   currentFb = esp_camera_fb_get();
   if (!currentFb) {
     Serial.println("[ERROR] Captura del sensor CMOS fallida.");
-    heltecSerial.println("SIZE:0"); 
+    heltecSerial.println("SIZE:0");
     return;
   }
 
   // --- DIAGNÓSTICO DE INTEGRIDAD DE ARCHIVO JPEG (EOI - End of Image) ---
   if (currentFb->len >= 2) {
-      uint8_t b1 = currentFb->buf[currentFb->len - 2];
-      uint8_t b2 = currentFb->buf[currentFb->len - 1];
-      Serial.printf("[DEBUG] Últimos dos bytes en PSRAM: %02X %02X (Esperado: FF D9)\n", b1, b2);
-      
-      bool foundEOI = false;
-      for (size_t i = 0; i < currentFb->len - 1; i++) {
-          if (currentFb->buf[i] == 0xFF && currentFb->buf[i+1] == 0xD9) {
-              Serial.printf("[DEBUG] Marcador de integridad FF D9 encontrado en índice %u\n", i);
-              foundEOI = true;
-              break;
-          }
+    uint8_t b1 = currentFb->buf[currentFb->len - 2];
+    uint8_t b2 = currentFb->buf[currentFb->len - 1];
+    Serial.printf(
+        "[DEBUG] Últimos dos bytes en PSRAM: %02X %02X (Esperado: FF D9)\n", b1,
+        b2);
+
+    bool foundEOI = false;
+    for (size_t i = 0; i < currentFb->len - 1; i++) {
+      if (currentFb->buf[i] == 0xFF && currentFb->buf[i + 1] == 0xD9) {
+        Serial.printf(
+            "[DEBUG] Marcador de integridad FF D9 encontrado en índice %u\n",
+            i);
+        foundEOI = true;
+        break;
       }
-      if (!foundEOI) {
-          Serial.println("[WARNING] Marcador de cierre JPEG FF D9 no detectado. Posible corrupción de frame.");
-      }
+    }
+    if (!foundEOI) {
+      Serial.println("[WARNING] Marcador de cierre JPEG FF D9 no detectado. "
+                     "Posible corrupción de frame.");
+    }
   }
 
   // Reportar tamaño total al MCU maestro
   uint32_t imgSize = currentFb->len;
   heltecSerial.printf("SIZE:%u\n", imgSize);
-  
-  Serial.printf("[INFO] Foto capturada exitosamente. Tamaño: %u bytes. Esperando descarga...\n", imgSize);
+
+  Serial.printf("[INFO] Foto capturada exitosamente. Tamaño: %u bytes. "
+                "Esperando descarga...\n",
+                imgSize);
 }

@@ -417,46 +417,59 @@ void loop() {
   }
 }
 
+unsigned long lastButtonTime = 0;
+bool lastButtonState = HIGH;
+unsigned long lastEncoderTime = 0;
+
 /**
  * @brief Gestiona el giro del encoder rotativo.
  * Cambia la selección de menú o el valor numérico según si estamos en modo edición o navegación.
  */
 void handleEncoder() {
   int clk = digitalRead(PIN_CLK);
-  
-  if (clk != lastClk && clk == LOW) {
-    bool dir = digitalRead(PIN_DT) != clk; ///< true: Horario, false: Antihorario
-    
-    if (!inEditMode) {
-      // Modo Navegación: Cambiar selección de fila en pantalla
-      menuIndex = dir ? min(menuIndex + 1, MENU_TOTAL - 1) : max(menuIndex - 1, 0);
-      
-      // Ajustar scroll automático de 5 renglones
-      if (menuIndex >= scrollOffset + 5) scrollOffset++;
-      if (menuIndex < scrollOffset) scrollOffset--;
-    } else {
-      // Modo Edición: Incrementar o decrementar el parámetro del menú
-      menu[menuIndex].currentVal = constrain(menu[menuIndex].currentVal + (dir ? 1 : -1), 
-                                           menu[menuIndex].minVal, menu[menuIndex].maxVal);
-      // Aplicar el valor modificado inmediatamente al sensor
-      menu[menuIndex].updateFunc(s, menu[menuIndex].currentVal);
+  if (clk != lastClk) {
+    unsigned long now = millis();
+    if (now - lastEncoderTime > 5) { // Ignorar rebotes menores a 5ms
+      lastEncoderTime = now;
+      if (clk == LOW) {
+        bool dir = digitalRead(PIN_DT) != clk; ///< true: Horario, false: Antihorario
+        if (!inEditMode) {
+          // Modo Navegación: Cambiar selección de fila en pantalla
+          menuIndex = dir ? min(menuIndex + 1, MENU_TOTAL - 1) : max(menuIndex - 1, 0);
+          
+          // Ajustar scroll automático de 5 renglones
+          if (menuIndex >= scrollOffset + 5) scrollOffset = menuIndex - 4;
+          if (menuIndex < scrollOffset) scrollOffset = menuIndex;
+        } else {
+          // Modo Edición: Incrementar o decrementar el parámetro del menú
+          menu[menuIndex].currentVal = constrain(menu[menuIndex].currentVal + (dir ? 1 : -1), 
+                                               menu[menuIndex].minVal, menu[menuIndex].maxVal);
+          // Aplicar el valor modificado inmediatamente al sensor
+          menu[menuIndex].updateFunc(s, menu[menuIndex].currentVal);
+        }
+        updateMenu();
+      }
     }
-    updateMenu();
+    lastClk = clk;
   }
-  lastClk = clk;
 }
 
 /**
- * @brief Gestiona la pulsación física del botón del encoder.
+ * @brief Gestiona la pulsación física del botón del encoder de manera no-bloqueante.
  * Alterna el estado de edición.
  */
 void handleMenuButton() {
-  if (digitalRead(PIN_SW) == LOW) {
-    delay(200); ///< Antirrebotes (Debounce)
-    inEditMode = !inEditMode; 
-    updateMenu();
-    while(digitalRead(PIN_SW) == LOW); ///< Esperar liberación física
+  bool currentButtonState = digitalRead(PIN_SW);
+  if (currentButtonState == LOW && lastButtonState == HIGH) {
+    unsigned long now = millis();
+    if (now - lastButtonTime > 250) { // Debounce de 250ms
+      lastButtonTime = now;
+      inEditMode = !inEditMode;
+      updateMenu();
+      Serial.printf("[UI] Cambio a modo %s\n", inEditMode ? "EDICION" : "NAVEGACION");
+    }
   }
+  lastButtonState = currentButtonState;
 }
 
 /**
