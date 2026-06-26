@@ -119,6 +119,9 @@ uint8_t missingAttempts = 0;             ///< Contador de intentos de solicitud 
 uint32_t imgSize = 0;                    ///< Tamaño neto en bytes de la imagen capturada
 int activeImageCommandId = 0;            ///< ID del comando web que solicitó la foto activa
 volatile bool isGpsNotFixed = false;     ///< Indica si el nodo sensor respondió que no tiene fix de GPS
+volatile bool lastResponseWasNack = false; ///< Indica si la última respuesta recibida fue un NACK
+String lastNackMsg = "";                  ///< Contenido del último mensaje NACK recibido
+
 
 unsigned long lastPollTime = 0;          ///< Última vez que se sondeó un nodo
 const unsigned long pollInterval = 30000;///< Intervalo de sondeo (30 segundos)
@@ -947,6 +950,8 @@ void handleLoRa() {
                             if (payloadMsg == "GPS_NO_FIX") {
                                 isGpsNotFixed = true;
                             }
+                            lastResponseWasNack = true;
+                            lastNackMsg = payloadMsg;
                             responseReceived = true; // Liberar polling de red
                         }
                     }
@@ -1229,6 +1234,8 @@ void checkPendingCommands() {
             ccp->colorbar = cbVal;
             
             responseReceived = false;
+            lastResponseWasNack = false;
+            lastNackMsg = "";
             targetNode = nodeNum;
             radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
             radio.startReceive();
@@ -1238,12 +1245,21 @@ void checkPendingCommands() {
                 smartDelay(10);
                 handleLoRa();
                 if (responseReceived) {
-                    success = true;
-                    responseMsg = "Configuración de cámara aplicada con éxito.";
+                    if (lastResponseWasNack) {
+                        success = false;
+                        if (lastNackMsg == "CAMERA_TIMEOUT") {
+                            responseMsg = "Error: La cámara no respondió (Timeout al aplicar configuración).";
+                        } else {
+                            responseMsg = "Error al configurar cámara: " + lastNackMsg;
+                        }
+                    } else {
+                        success = true;
+                        responseMsg = "Configuración de cámara aplicada con éxito: Cámara confirmó recibo (CONF_ACK).";
+                    }
                     break;
                 }
             }
-            if (!success) {
+            if (!success && responseMsg == "") {
                 responseMsg = "Timeout: Sin confirmación ACK del nodo sensor.";
             }
             

@@ -55,7 +55,7 @@ uint8_t cam_colorbar = 0;
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la
 // topología lineal.
-#define MY_NODE_ID 2
+#define MY_NODE_ID 4
 
 // --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
 #if MY_NODE_ID == 2
@@ -573,36 +573,7 @@ void requestAndSendImage(uint8_t destId) {
   while (camSerial.available())
     camSerial.read(); // Limpiar remanentes serie
 
-  // Enviar configuración a la cámara vía serial
-  Serial.printf(
-      "[CAMERA] Enviando configuración UART completa de 24 parametros...\n");
-  camSerial.printf("SET_CONFIG %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
-                   "%d %d %d %d %d %d %d %d\n",
-                   cam_resolution, cam_brightness, cam_contrast, cam_quality,
-                   cam_saturation, cam_special_effect, cam_whitebal,
-                   cam_awb_gain, cam_wb_mode, cam_exposure_ctrl, cam_aec2,
-                   cam_ae_level, cam_aec_value, cam_gain_ctrl, cam_agc_gain,
-                   cam_gainceiling, cam_bpc, cam_wpc, cam_raw_gma, cam_lenc,
-                   cam_hmirror, cam_vflip, cam_dcw, cam_colorbar);
-
-  // Esperar confirmación CONF_ACK (máximo 500ms)
-  unsigned long ackStart = millis();
-  bool gotConfAck = false;
-  while (millis() - ackStart < 500) {
-    if (camSerial.available()) {
-      String resp = camSerial.readStringUntil('\n');
-      resp.trim();
-      if (resp == "CONF_ACK") {
-        gotConfAck = true;
-        break;
-      }
-    }
-    delay(5);
-  }
-  Serial.printf("[CAMERA] Confirmación de configuración: %s\n",
-                gotConfAck ? "OK (CONF_ACK)" : "TIMEOUT");
-
-  // Solicitar disparo de foto
+  // Solicitar disparo de foto directamente (la camara recuerda su ultima configuracion en NVS)
   Serial.println("[CAMERA DEBUG] Enviando TAKE_PIC a la camara...");
   camSerial.println("TAKE_PIC");
 
@@ -1081,20 +1052,77 @@ void handleLoRa() {
                             cam_resolution, cam_brightness, cam_contrast,
                             cam_quality);
 
-              // Responder con ACK de confirmación
-              LoRaPacket ackPacket;
-              ackPacket.header.syncWord[0] = LORA_SYNC_0;
-              ackPacket.header.syncWord[1] = LORA_SYNC_1;
-              ackPacket.header.srcId = MY_NODE_ID;
-              ackPacket.header.destId = rxPacket.header.srcId;
-              ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
-                                               ? (MY_NODE_ID - 1)
-                                               : (MY_NODE_ID + 1);
-              ackPacket.header.type = ACK;
-              ackPacket.header.seqNum = packetSequence++;
-              ackPacket.header.ttl = 5;
-              radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
-              radio.startReceive();
+              // Encender la cámara físicamente para guardar su configuración local
+              Serial.println("[CAMERA DEBUG] Encendiendo camara para configuracion remota (CAM_EN = HIGH)...");
+              digitalWrite(CAM_EN, HIGH);
+              delay(2000); // Esperar que arranque la camara
+
+              // Vaciar buffer RX
+              while (camSerial.available()) camSerial.read();
+
+              // Enviar config por serial
+              Serial.println("[CAMERA] Enviando configuracion a la camara...");
+              camSerial.printf("SET_CONFIG %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
+                               "%d %d %d %d %d %d %d %d\n",
+                               cam_resolution, cam_brightness, cam_contrast, cam_quality,
+                               cam_saturation, cam_special_effect, cam_whitebal,
+                               cam_awb_gain, cam_wb_mode, cam_exposure_ctrl, cam_aec2,
+                               cam_ae_level, cam_aec_value, cam_gain_ctrl, cam_agc_gain,
+                               cam_gainceiling, cam_bpc, cam_wpc, cam_raw_gma, cam_lenc,
+                               cam_hmirror, cam_vflip, cam_dcw, cam_colorbar);
+
+              // Esperar confirmación
+              unsigned long configAckStart = millis();
+              bool gotConfigAck = false;
+              while (millis() - configAckStart < 500) {
+                if (camSerial.available()) {
+                  String resp = camSerial.readStringUntil('\n');
+                  resp.trim();
+                  if (resp == "CONF_ACK") {
+                    gotConfigAck = true;
+                    break;
+                  }
+                }
+                delay(5);
+              }
+              Serial.printf("[CAMERA] Confirmacion de configuracion remota: %s\n", gotConfigAck ? "OK" : "TIMEOUT");
+
+              // Apagar la camara para ahorrar energia
+              digitalWrite(CAM_EN, LOW);
+
+              // Responder con ACK de confirmación si la cámara contestó, o NACK en caso contrario
+              if (gotConfigAck) {
+                LoRaPacket ackPacket;
+                ackPacket.header.syncWord[0] = LORA_SYNC_0;
+                ackPacket.header.syncWord[1] = LORA_SYNC_1;
+                ackPacket.header.srcId = MY_NODE_ID;
+                ackPacket.header.destId = rxPacket.header.srcId;
+                ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
+                                                 ? (MY_NODE_ID - 1)
+                                                 : (MY_NODE_ID + 1);
+                ackPacket.header.type = ACK;
+                ackPacket.header.seqNum = packetSequence++;
+                ackPacket.header.ttl = 5;
+                radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
+                radio.startReceive();
+                Serial.println("[LORA] Enviado ACK de configuracion exitosa al concentrador.");
+              } else {
+                LoRaPacket nackPacket;
+                nackPacket.header.syncWord[0] = LORA_SYNC_0;
+                nackPacket.header.syncWord[1] = LORA_SYNC_1;
+                nackPacket.header.srcId = MY_NODE_ID;
+                nackPacket.header.destId = rxPacket.header.srcId;
+                nackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
+                                                 ? (MY_NODE_ID - 1)
+                                                 : (MY_NODE_ID + 1);
+                nackPacket.header.type = NACK;
+                nackPacket.header.seqNum = packetSequence++;
+                nackPacket.header.ttl = 5;
+                strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
+                radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
+                radio.startReceive();
+                Serial.println("[LORA WARNING] Enviado NACK (CAMERA_TIMEOUT) al concentrador.");
+              }
             } else if (rxPacket.header.type == CMD_PING) {
               delay(80);
               LoRaPacket ackPacket;
