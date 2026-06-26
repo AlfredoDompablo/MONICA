@@ -97,8 +97,19 @@ bool sdMounted = false;       ///< Indica si la tarjeta SD fue montada con éxit
 File currentImgFile;          ///< Descriptor de archivo de imagen para lectura
 bool isImgFileOpen = false;   ///< Estado de apertura del archivo de imagen
 
-File activeFile;              ///< Descriptor de archivo para escritura de imagen en progreso
-bool isFileActive = false;    ///< Estado de sesión de descarga de imagen
+// --- CONFIGURACIÓN DE COLA FREERTOS PARA ESCRITURA EN SD ---
+struct ImageChunkMessage {
+    uint8_t srcId;
+    uint8_t type; // DATA_IMG_START, DATA_IMG_CHUNK, DATA_IMG_END
+    uint16_t seqNum;
+    uint32_t payloadLen;
+    uint8_t payload[240]; // Coincide con LORA_MAX_PAYLOAD = 240
+};
+
+QueueHandle_t sdQueue = NULL;
+volatile bool isSDWritingActive = false;
+
+void sdWriteTask(void* parameter);
 
 uint16_t expectedSeqNum = 0;             ///< Fragmento de secuencia esperado. 0 significa sesión inactiva.
 unsigned long lastChunkReceivedTime = 0;  ///< Último milisegundo en que se recibió un fragmento (Timeout check)
@@ -264,13 +275,18 @@ public:
  * @brief Retardo inteligente para procesamiento del decodificador GPS.
  */
 static void smartDelay(unsigned long ms) {
-  unsigned long start = millis();
-  do {
-    int maxBytes = 50; 
-    while (Serial1.available() && maxBytes-- > 0)
-      gps.encode(Serial1.read());
-  } while (millis() - start < ms);
+  delay(ms);
 }
+
+// Icono de Satélite de 8x8 píxeles
+const uint8_t satellite_icon[] PROGMEM = {
+    0xff, 0x9f, 0x97, 0xe3, 0xc7, 0x89, 0xd9, 0xff
+};
+
+// Variables de estado para renderizado de pantalla
+String screenStatus = "ESCUCHANDO";
+String screenActivity = "Listo";
+String screenProgress = "";
 
 /**
  * @brief Dibuja la cabecera azul marino del dashboard.
@@ -283,6 +299,107 @@ void drawHeader(const char* title) {
     tft.setCursor((160 - strlen(title) * 6) / 2, 4); 
     tft.print(title);
 }
+
+/**
+ * @brief Dibuja una pantalla de carga/inicio estética con barra de progreso.
+ */
+void drawBootScreen(const char* stepName, int percent, uint16_t statusColor = TFT_YELLOW) {
+    tft.fillScreen(TFT_BLACK);
+    
+    // 1. Cabecera Azul Marino Centrada
+    tft.fillRect(0, 0, 160, 18, tft.color565(0, 51, 102));
+    tft.drawFastHLine(0, 18, 160, tft.color565(200, 200, 200));
+    tft.setTextColor(TFT_WHITE, tft.color565(0, 51, 102));
+    tft.setTextSize(1);
+    tft.setCursor((160 - 13 * 6) / 2, 5); // "MONICA SYSTEM"
+    tft.print("MONICA SYSTEM");
+    
+    // 2. Título Central
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.setCursor((160 - 15 * 6) / 2, 26);
+    tft.print("INICIALIZANDO...");
+    
+    // 3. Paso de carga actual
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setCursor((160 - strlen(stepName) * 6) / 2, 42);
+    tft.print(stepName);
+    
+    // 4. Barra de progreso moderna
+    int barX = 15;
+    int barY = 56;
+    int barW = 130;
+    int barH = 8;
+    tft.drawRect(barX, barY, barW, barH, tft.color565(80, 80, 80));
+    int progressW = (percent * (barW - 4)) / 100;
+    if (progressW > 0) {
+        tft.fillRect(barX + 2, barY + 2, progressW, barH - 4, statusColor);
+    }
+}
+
+
+/**
+ * @brief Renderiza de manera estructurada y profesional la interfaz gráfica en la pantalla TFT.
+ */
+void updateTFT() {
+  tft.fillScreen(TFT_BLACK);
+  
+  // 1. Cabecera (Azul Marino Premium - Centrada)
+  drawHeader("MONICA GATEWAY");
+  
+  // 2. Fila de Estados (SD, WiFi/MQTT) en y = 18
+  tft.setCursor(4, 18);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.print("SD:");
+  tft.setTextColor(sdMounted ? TFT_GREEN : TFT_RED, TFT_BLACK);
+  tft.print(sdMounted ? "OK" : "ER");
+  
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.print(" | WF:");
+  bool wfConnected = (WiFi.status() == WL_CONNECTED);
+  bool mqConnected = mqttClient.connected();
+  if (wfConnected) {
+    tft.setTextColor(mqConnected ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
+    tft.print(mqConnected ? "MQ" : "OK");
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("ER");
+  }
+  
+  // Separador intermedio (y = 28)
+  tft.drawFastHLine(0, 28, 160, tft.color565(80, 80, 80));
+  
+  // 3. Tarjeta central de Estado (y = 32 a 58)
+  tft.drawRoundRect(4, 32, 152, 26, 3, tft.color565(120, 120, 120));
+  tft.setCursor(8, 36);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.print(screenStatus);
+  
+  tft.setCursor(8, 46);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.print(screenActivity);
+  
+  // 4. Progreso / Logs Inferiores (y = 62 a 79)
+  tft.drawFastHLine(0, 62, 160, tft.color565(80, 80, 80));
+  tft.setCursor(4, 67);
+  if (screenProgress.length() > 0) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.print(screenProgress);
+  } else {
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.printf("IP: %s", WiFi.localIP().toString().c_str());
+  }
+}
+
+/**
+ * @brief Actualiza de forma segura el estado de la pantalla y fuerza el redibujado.
+ */
+void setScreenStatus(String status, String activity, String progress = "") {
+  screenStatus = status;
+  screenActivity = activity;
+  screenProgress = progress;
+  updateTFT();
+}
+
 
 /**
  * @brief Configuración del sistema de hardware y enlace inalámbrico.
@@ -300,19 +417,15 @@ void setup() {
   // Inicializar pantalla TFT
   tft.init();
   tft.setRotation(3);
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(0, 0);
-  tft.println("Concentrador Init...");
+  drawBootScreen("Iniciando hardware...", 10);
 
-  // Inicializar receptor GPS
-  Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
+  // Inicializar receptor GPS (Deshabilitado: Concentrador no envía datos propios)
+  // Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
 
   // Iniciar bus SPI dedicado y transceptor LoRa
+  drawBootScreen("Iniciando LoRa...", 25);
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   Serial.println("Iniciando transceptor LoRa SX1262 del Concentrador...");
-  tft.println("Iniciando LoRa...");
   
   int state = radio.begin(
     LORA_FREQUENCY,
@@ -326,77 +439,75 @@ void setup() {
     LORA_USE_REGULATOR
   );
   if (state == RADIOLIB_ERR_NONE) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.println("LoRa OK!");
     Serial.println("LoRa SX1262: INICIALIZADO CON EXITO [OK]");
+    drawBootScreen("LoRa OK", 45, TFT_GREEN);
   } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.print("Error LoRa: "); tft.println(state);
     Serial.printf("[ERROR] Fallo al iniciar LoRa SX1262. Codigo: %d\n", state);
+    drawBootScreen("LoRa ERROR", 45, TFT_RED);
   }
+  delay(300);
   
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
   // --- TARJETA SD: CONFIGURACIÓN POR BUS SPI ALTERNATIVO HSPI ---
   // Se instancia dinámicamente para prevenir interferencias con la pantalla durante el arranque
-  tft.setTextSize(1);
+  drawBootScreen("Verificando SD...", 60);
   spiSD = new SPIClass(HSPI);
   spiSD->begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   
-  if (!SD.begin(SD_CS, *spiSD)) {
+  if (!SD.begin(SD_CS, *spiSD, 16000000)) {
     Serial.println("[ERROR] Fallo al montar la tarjeta SD!");
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.println("Error: SD Card!");
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
     sdMounted = false;
+    drawBootScreen("SD ERROR", 75, TFT_RED);
   } else {
-    Serial.println("[INFO] Tarjeta SD inicializada correctamente.");
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.println("SD OK!");
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    Serial.println("[INFO] Tarjeta SD inicializada correctamente a 16 MHz.");
     sdMounted = true;
+    drawBootScreen("SD OK", 75, TFT_GREEN);
   }
+  delay(300);
 
   // Conexión WiFi
+  drawBootScreen("Conectando WiFi...", 85);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  tft.print("Conectando WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
+  int wifiAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED && wifiAttempts < 20) {
     delay(500);
-    tft.print(".");
+    wifiAttempts++;
   }
   
-  // Dashboard Estático
-  tft.fillScreen(TFT_BLACK);
-  drawHeader("MONICA CONCENTRADOR");
-  
-  tft.setCursor(0, 18);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.print("SD: ");
-  if (sdMounted) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.print("OK");
+  if (WiFi.status() == WL_CONNECTED) {
+    drawBootScreen("WiFi OK", 95, TFT_GREEN);
   } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.print("ERR");
+    drawBootScreen("WiFi ERROR", 95, TFT_RED);
   }
-  
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.print("  |  WiFi: ");
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.print("OK");
-  
-  tft.setCursor(0, 28);
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.print("IP: ");
-  tft.print(WiFi.localIP());
-  
-  tft.drawFastHLine(0, 39, 160, tft.color565(80, 80, 80));
-  tft.drawFastHLine(0, 63, 160, tft.color565(80, 80, 80));
+  delay(300);
 
   // Configurar MQTT
+  drawBootScreen("Iniciando MQTT...", 98);
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
   reconnectMQTT();
+  
+  drawBootScreen("Listo!", 100, TFT_GREEN);
+  delay(500);
+
+  // Crear cola y tarea FreeRTOS para escritura de SD en el Core 0
+  sdQueue = xQueueCreate(15, sizeof(ImageChunkMessage));
+  if (sdQueue != NULL) {
+      xTaskCreatePinnedToCore(
+          sdWriteTask,
+          "sdWriteTask",
+          8192,
+          NULL,
+          2, // Prioridad media
+          NULL,
+          0 // Ejecutar en Core 0 para que no interfiera con LoRa en Core 1
+      );
+      Serial.println("[Queue SD] Cola y tarea FreeRTOS creadas con éxito.");
+  } else {
+      Serial.println("[Queue SD] ERROR al crear la cola de escritura.");
+  }
+
+  // Dashboard Estático
+  updateTFT();
 
   // Entrar en modo escucha de LoRa
   radio.startReceive();
@@ -458,22 +569,15 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-api-key", API_KEY);
   
-  tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-  tft.setCursor(0, 53);
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.print("Subiendo HTTP...");
+  setScreenStatus("SUBIENDO TELEMETRIA", "Nodo " + String(srcId) + " -> API");
   
   int httpResponseCode = http.POST(jsonOutput);
-  tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-  tft.setCursor(0, 53);
   if (httpResponseCode == 200 || httpResponseCode == 201) {
     Serial.println(String("Sensor Reenviado OK: ") + httpResponseCode);
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.print("HTTP: POST OK!");
+    setScreenStatus("ESCUCHANDO", "HTTP POST OK (Sensor " + String(srcId) + ")");
   } else {
     Serial.println(String("Error reenviando sensor: ") + httpResponseCode);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.printf("HTTP: ERR %d", httpResponseCode);
+    setScreenStatus("ESCUCHANDO", "HTTP ERR " + String(httpResponseCode));
   }
   http.end();
 }
@@ -489,20 +593,12 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
  *     de fragmentos faltantes (`CMD_REQ_MISSING`). Si no los hay, cierra el archivo y lo envía a la API.
  */
 void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
-    String filename = String("/img_node_") + packet->header.srcId + ".jpg";
-    
-    tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-    tft.setCursor(0, 53);
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    
+    if (sdQueue == NULL) return;
+
     // --- INICIO DE TRANSMISIÓN DE FOTO ---
     if (packet->header.type == DATA_IMG_START) {
         lastChunkReceivedTime = millis();
-        if (isFileActive) {
-            activeFile.close();
-            isFileActive = false;
-        }
-
+        
         if (payloadLen >= 6) {
             memcpy(&imgSize, packet->payload, 4);
             memcpy(&totalChunks, packet->payload + 4, 2);
@@ -522,79 +618,52 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         expectedSeqNum = 1;
         missingAttempts = 0;
         
-        if (SD.exists(filename)) {
-            SD.remove(filename);
-        }
+        setScreenStatus("RECIBIENDO FOTO", "De Nodo " + String(packet->header.srcId), "Preparando SD...");
         
-        activeFile = SD.open(filename, FILE_WRITE);
-        if (activeFile) {
-            isFileActive = true;
-            // Pre-asignar espacio contiguo para optimizar velocidad del bus SPI al escribir
-            if (imgSize > 0) {
-                activeFile.seek(imgSize - 1);
-                activeFile.write(0);
-                activeFile.seek(0);
-                Serial.printf("SD: Espacio pre-asignado contiguamente para %u bytes\n", imgSize);
-            }
-            Serial.printf("IMG_START de Nodo %d (Descriptor de archivo SD abierto para streaming)\n", packet->header.srcId);
-        } else {
-            Serial.println("Error: Falló al inicializar y abrir el archivo en la SD para streaming");
+        // Encolar mensaje para la tarea de la SD
+        ImageChunkMessage msg;
+        msg.srcId = packet->header.srcId;
+        msg.type = packet->header.type;
+        msg.seqNum = packet->header.seqNum;
+        msg.payloadLen = payloadLen;
+        if (payloadLen > 0) {
+            memcpy(msg.payload, packet->payload, min(payloadLen, (size_t)240));
         }
-        tft.print("Recibiendo Foto...");
+        xQueueSend(sdQueue, &msg, 0);
     } 
     // --- RECIBIR FRAGMENTO ---
     else if (packet->header.type == DATA_IMG_CHUNK) {
         uint16_t seq = packet->header.seqNum;
         lastChunkReceivedTime = millis();
         
-        // Inicialización de emergencia por si se perdió el paquete de inicio
-        if (!isFileActive) {
-            Serial.printf("LoRa RX: DATA_IMG_CHUNK seq %d recibido sin START. Inicializando sesión de emergencia...\n", seq);
-            if (chunkReceived != NULL) {
-                free(chunkReceived);
-                chunkReceived = NULL;
-            }
-            chunkReceived = (bool*)calloc(2048, sizeof(bool));
-            totalChunks = 2048; 
-            expectedSeqNum = 1;
-            missingAttempts = 0;
-            
-            if (SD.exists(filename)) {
-                SD.remove(filename);
-            }
-            activeFile = SD.open(filename, FILE_WRITE);
-            if (activeFile) {
-                isFileActive = true;
-            }
-        }
-
         // Ignorar duplicados
         if (chunkReceived != NULL && seq < 2048 && chunkReceived[seq]) {
             Serial.printf("LoRa RX: Descartando chunk duplicado seq %d (ya recibido)\n", seq);
             return;
         }
 
-        // Escribir el fragmento en la ubicación de disco exacta (offset)
-        if (isFileActive && payloadLen > 0) {
-            uint32_t offset = (seq - 1) * LORA_MAX_PAYLOAD;
-            activeFile.seek(offset);
-            activeFile.write(packet->payload, payloadLen);
-            
-            if (chunkReceived != NULL && seq < 2048) {
-                chunkReceived[seq] = true;
-            }
-            if (seq == expectedSeqNum) {
-                expectedSeqNum++;
-            }
-            Serial.printf("IMG_CHUNK seq %d (%u bytes guardados en SD en offset %u)\n", seq, payloadLen, offset);
+        if (chunkReceived != NULL && seq < 2048) {
+            chunkReceived[seq] = true;
         }
-        
+        if (seq == expectedSeqNum) {
+            expectedSeqNum++;
+        }
+        Serial.printf("IMG_CHUNK seq %d (%u bytes encolados para SD)\n", seq, payloadLen);
+
         if (seq % 10 == 0 || seq == totalChunks) {
-            tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-            tft.setCursor(0, 65);
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
-            tft.printf("%u / %u Chunks", (uint32_t)seq, totalChunks);
+            setScreenStatus("RECIBIENDO FOTO", "De Nodo " + String(packet->header.srcId), String(seq) + " / " + String(totalChunks) + " Chunks");
         }
+
+        // Encolar mensaje para la tarea de la SD
+        ImageChunkMessage msg;
+        msg.srcId = packet->header.srcId;
+        msg.type = packet->header.type;
+        msg.seqNum = seq;
+        msg.payloadLen = payloadLen;
+        if (payloadLen > 0) {
+            memcpy(msg.payload, packet->payload, min(payloadLen, (size_t)240));
+        }
+        xQueueSend(sdQueue, &msg, 0);
     }
     // --- FIN DE LA IMAGEN ---
     else if (packet->header.type == DATA_IMG_END) {
@@ -650,14 +719,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             }
         }
 
-        // Solicitar retransmisión (NACK) si faltan fragmentos
         if (missingCount > 0) {
             if (missingAttempts >= 3) {
                 Serial.printf("LoRa Integrity: ¡Perdidos %u chunks, pero se alcanzó el límite de 3 intentos! Consolidando imagen con faltantes...\n", missingCount);
-                tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-                tft.setCursor(0, 53);
-                tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                tft.print("Img Incompleta!");
+                setScreenStatus("LORA INTEGRIDAD", "Img Incompleta!", "Lim. Reintentos");
                 
                 if (activeImageCommandId > 0) {
                     updateCommandStatus(activeImageCommandId, "FAILED", "Imagen incompleta después de 3 reintentos LoRa.");
@@ -669,10 +734,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 missingAttempts++;
                 Serial.printf("LoRa Integrity: ¡Perdidos %u chunks! Enviando petición de retransmisión CMD_REQ_MISSING (Intento %d/3)...\n", missingCount, missingAttempts);
                 
-                tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-                tft.setCursor(0, 53);
-                tft.setTextColor(TFT_RED, TFT_BLACK);
-                tft.printf("NACK: %u (Int %d)", missingCount, missingAttempts);
+                setScreenStatus("RECIBIENDO FOTO", "NACK: Peticion Chunks", "Reintento " + String(missingAttempts) + "/3");
                 
                 LoRaPacket nackPacket;
                 memset(&nackPacket, 0, sizeof(LoRaHeader));
@@ -703,10 +765,24 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             activeImageCommandId = 0;
         }
         
-        tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-        tft.setCursor(0, 53);
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.print("Reensamblado OK!");
+        setScreenStatus("FOTO COMPLETADA", "Reensamblado OK", "100% en SD");
+
+        // Encolar mensaje END para que la tarea de la SD cierre el archivo
+        ImageChunkMessage msg;
+        msg.srcId = packet->header.srcId;
+        msg.type = packet->header.type;
+        msg.seqNum = packet->header.seqNum;
+        msg.payloadLen = payloadLen;
+        if (payloadLen > 0) {
+            memcpy(msg.payload, packet->payload, min(payloadLen, (size_t)240));
+        }
+        xQueueSend(sdQueue, &msg, 0);
+
+        // Esperar a que la cola termine de escribir todo y cierre el archivo
+        unsigned long startWait = millis();
+        while ((uxQueueMessagesWaiting(sdQueue) > 0 || isSDWritingActive) && (millis() - startWait < 5000)) {
+            delay(10);
+        }
 
         // Responder confirmación final de recepción
         LoRaPacket ackPacket;
@@ -731,15 +807,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             chunkReceived = NULL;
         }
 
-        if (isFileActive) {
-            activeFile.close();
-            isFileActive = false;
-            Serial.println("Archivo de imagen consolidado y cerrado en SD con éxito.");
-        }
-        
         // --- SUBIDA HTTP POST CON RETRIES A LA API DE INTELIGENCIA ARTIFICIAL ---
         int attempts = 3;
         int httpResponseCode = -1;
+        String filename = String("/img_node_") + packet->header.srcId + ".jpg";
         
         for (int attempt = 1; attempt <= attempts; attempt++) {
             File imgFile = SD.open(filename, FILE_READ);
@@ -751,10 +822,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 }
                 
                 Serial.printf("Subida API - Intento %d de %d...\n", attempt, attempts);
-                tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-                tft.setCursor(0, 60);
-                tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-                tft.printf("Subiendo %d/%d...", attempt, attempts);
+                setScreenStatus("SUBIENDO FOTO", "Enviando a API IA", "Intento " + String(attempt) + "/" + String(attempts));
                 
                 // Formatear payload de streaming Base64 en caliente
                 char imgNodeFormatted[20];
@@ -775,16 +843,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 imgFile.close();
                 
                 if (httpResponseCode == 200 || httpResponseCode == 201) {
-                    tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-                    tft.setCursor(0, 60);
-                    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-                    tft.println("Foto API OK!");
+                    setScreenStatus("ESCUCHANDO", "Foto subida a la API IA", "Subida Exitosa");
                     break;
                 } else {
-                    tft.fillRect(0, 60, 160, 20, TFT_BLACK);
-                    tft.setCursor(0, 60);
-                    tft.setTextColor(TFT_RED, TFT_BLACK);
-                    tft.printf("ERR %d (Intentando...)", httpResponseCode);
+                    setScreenStatus("SUBIENDO FOTO", "ERR " + String(httpResponseCode), "Reintentando...");
                 }
                 
                 if (attempt < attempts) {
@@ -795,7 +857,6 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 break;
             }
         }
-        
         lastPollTime = millis(); 
     }
 }
@@ -815,12 +876,7 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     packet.header.seqNum = packetSequence++;
     packet.header.ttl = 5;
 
-    tft.fillRect(0, 80, 160, 20, TFT_BLACK);
-    tft.setCursor(0, 80);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    if(cmd == CMD_REQ_TELEMETRY) tft.printf("Poll Sensor -> Nodo %d", nodeToPoll);
-    else tft.printf("Poll Imagen -> Nodo %d", nodeToPoll);
-
+    setScreenStatus("SONDEANDO RED", "Nodo " + String(nodeToPoll), cmd == CMD_REQ_TELEMETRY ? "Pedir Telemetria" : "Pedir Imagen");
     int txState = radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
     Serial.printf("Polling Node %d with CMD 0x%02X, TX State: %d\n", nodeToPoll, cmd, txState);
     radio.startReceive();
@@ -851,12 +907,9 @@ void handleLoRa() {
 
                     // Telemetría ambiental
                     if (packet.header.type == DATA_TELEMETRY) {
-                        tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                        tft.setCursor(0, 42);
-                        tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                        tft.printf("RX: SENSOR (%d)", packet.header.srcId);
-                        
                         SensorPayload* sp = (SensorPayload*)packet.payload;
+                        setScreenStatus("RX TELEMETRIA", "De Nodo " + String(packet.header.srcId), "Bat: " + String(sp->battery_level) + "% | Temp: " + String(sp->temperature, 1) + "C");
+                        
                         forwardSensorData(packet.header.srcId, sp);
                         
                         if (packet.header.srcId == targetNode && !pollForImage) {
@@ -866,11 +919,6 @@ void handleLoRa() {
                     // Fragmento de imagen
                     else if (packet.header.type >= DATA_IMG_START && packet.header.type <= DATA_IMG_END) {
                         if(packet.header.type == DATA_IMG_START) {
-                           tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                           tft.setCursor(0, 42);
-                           tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
-                           tft.printf("RX: IMG (%d)", packet.header.srcId);
-                           
                            if (packet.header.srcId == targetNode && pollForImage) {
                                 responseReceived = true; 
                            }
@@ -879,10 +927,7 @@ void handleLoRa() {
                     }
                     // ACK de toma de foto exitosa
                     else if (packet.header.type == ACK) {
-                        tft.fillRect(0, 42, 160, 10, TFT_BLACK);
-                        tft.setCursor(0, 42);
-                        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-                        tft.printf("ACK Nodo %d", packet.header.srcId);
+                        setScreenStatus("ACK RECIBIDO", "Nodo " + String(packet.header.srcId), "Foto capturada OK");
                         
                         if (packet.header.srcId == targetNode) {
                             responseReceived = true; 
@@ -1266,11 +1311,20 @@ void checkPendingCommands() {
  */
 void loop() {
   static unsigned long lastHeartbeat = 0;
+  static unsigned long lastScreenUpdate = 0;
   
   // Heartbeat local de estado en consola cada 5 segundos
   if (millis() - lastHeartbeat > 5000) {
     Serial.println("[HEARTBEAT] Concentrador ejecutando loop...");
     lastHeartbeat = millis();
+  }
+
+  // Actualizar automáticamente la pantalla cada 5 segundos para refrescar satélites y WiFi/MQTT
+  if (millis() - lastScreenUpdate > 5000) {
+    lastScreenUpdate = millis();
+    if (screenStatus == "ESCUCHANDO") {
+      updateTFT();
+    }
   }
   
   if (expectedSeqNum == 0) {
@@ -1294,9 +1348,12 @@ void loop() {
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
   if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
       Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 60s.");
-      if (isFileActive) {
-          activeFile.close();
-          isFileActive = false;
+      if (sdQueue != NULL) {
+          ImageChunkMessage msg;
+          msg.srcId = targetNode;
+          msg.type = DATA_IMG_END;
+          msg.payloadLen = 0;
+          xQueueSend(sdQueue, &msg, 0);
       }
       expectedSeqNum = 0;
       if (chunkReceived != NULL) {
@@ -1311,10 +1368,7 @@ void loop() {
           activeImageCommandId = 0;
       }
       
-      tft.fillRect(0, 53, 160, 10, TFT_BLACK);
-      tft.setCursor(0, 53);
-      tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.print("Img Timeout!");
+      setScreenStatus("TIMEOUT IMAGEN", "Inactividad 60s", "Limpiando...");
   }
   
   // --- CONTROL DE MÁQUINA DE ESTADOS DE POLLING ---
@@ -1343,10 +1397,7 @@ void loop() {
                   currentAttempt++;
                   Serial.printf("LoRa Flow: Timeout! Re-intentando peticion al Nodo %d (Intento %d/3)...\n", targetNode, currentAttempt);
                   
-                  tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-                  tft.setCursor(0, 65);
-                  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-                  tft.printf("Reint %d... %d/3", targetNode, currentAttempt);
+                  setScreenStatus("SONDEANDO RED", "Reintento " + String(currentAttempt) + "/3 a Nodo " + String(targetNode), pollForImage ? "Pedir Imagen" : "Pedir Telemetria");
                   
                   PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
                   pollNode(targetNode, cmd);
@@ -1356,10 +1407,7 @@ void loop() {
                   // Fallar y saltar al siguiente nodo tras agotar intentos
                   Serial.printf("LoRa Flow: [FALLO] Sin respuesta del Nodo %d tras 3 intentos. Pasando al siguiente.\n", targetNode);
                   
-                  tft.fillRect(0, 65, 160, 12, TFT_BLACK);
-                  tft.setCursor(0, 65);
-                  tft.setTextColor(TFT_RED, TFT_BLACK);
-                  tft.printf("Err Nodo %d (3 int)", targetNode);
+                  setScreenStatus("ERROR SONDEO", "Fallo Nodo " + String(targetNode), "Agoto 3 intentos");
                   
                   if (pollForImage) {
                       targetNode++;
@@ -1661,6 +1709,76 @@ void reconnectMQTT() {
       } else {
         Serial.print("[MQTT] Falló conexión, rc=");
         Serial.println(mqttClient.state());
+      }
+    }
+  }
+}
+
+/**
+ * @brief Tarea de FreeRTOS en segundo plano para escribir fragmentos de imagen en la SD.
+ * Corre de forma asíncrona en el Core 0, evitando latencias críticas en el receptor LoRa.
+ */
+void sdWriteTask(void* parameter) {
+  ImageChunkMessage msg;
+  File activeFile;
+  bool isFileActive = false;
+  
+  for (;;) {
+    // Esperar de forma bloqueante y eficiente un mensaje en la cola
+    if (xQueueReceive(sdQueue, &msg, portMAX_DELAY) == pdPASS) {
+      isSDWritingActive = true;
+      String filename = String("/img_node_") + msg.srcId + ".jpg";
+
+      // 1. Iniciar sesión de streaming de imagen
+      if (msg.type == DATA_IMG_START) {
+        if (isFileActive) {
+          activeFile.close();
+          isFileActive = false;
+        }
+
+        uint32_t currentImgSize = 0;
+        uint16_t currentTotalChunks = 0;
+        if (msg.payloadLen >= 6) {
+          memcpy(&currentImgSize, msg.payload, 4);
+          memcpy(&currentTotalChunks, msg.payload + 4, 2);
+        }
+
+        if (SD.exists(filename)) {
+          SD.remove(filename);
+        }
+
+        activeFile = SD.open(filename, FILE_WRITE);
+        if (activeFile) {
+          isFileActive = true;
+          if (currentImgSize > 0) {
+            // Pre-asignación contigua para optimizar el bus SPI al escribir
+            activeFile.seek(currentImgSize - 1);
+            activeFile.write(0);
+            activeFile.seek(0);
+            Serial.printf("[Queue SD] Pre-asignado de %u bytes realizado con éxito.\n", currentImgSize);
+          }
+          Serial.printf("[Queue SD] Archivo SD %s abierto para escritura.\n", filename.c_str());
+        } else {
+          Serial.printf("[Queue SD] ERROR: Fallo al abrir archivo SD %s.\n", filename.c_str());
+        }
+      }
+      // 2. Escribir fragmento recibido
+      else if (msg.type == DATA_IMG_CHUNK) {
+        if (isFileActive && msg.payloadLen > 0) {
+          uint32_t offset = (msg.seqNum - 1) * LORA_MAX_PAYLOAD;
+          activeFile.seek(offset);
+          activeFile.write(msg.payload, msg.payloadLen);
+          Serial.printf("[Queue SD] Guardado chunk %d en SD offset %u (%u bytes)\n", msg.seqNum, offset, msg.payloadLen);
+        }
+      }
+      // 3. Finalizar o cancelar streaming de imagen
+      else if (msg.type == DATA_IMG_END) {
+        if (isFileActive) {
+          activeFile.close();
+          isFileActive = false;
+          Serial.println("[Queue SD] Archivo de imagen consolidado y cerrado en SD.");
+        }
+        isSDWritingActive = false;
       }
     }
   }
