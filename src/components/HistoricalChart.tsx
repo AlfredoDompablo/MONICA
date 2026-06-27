@@ -74,6 +74,8 @@ const PARAM_CONFIG: Record<string, { label: string, unit: string, min: number, m
 export default function HistoricalChart() {
     const { selectedNodeId } = useNodeSelection();
     const [selectedParam, setSelectedParam] = useState('ph');
+    const [timeRange, setTimeRange] = useState<'24h' | '10d' | '30d' | '1y'>('10d');
+    const [mounted, setMounted] = useState(false);
 
     const config = PARAM_CONFIG[selectedParam];
 
@@ -84,17 +86,31 @@ export default function HistoricalChart() {
     const [chartData, setChartData] = useState<any[]>([]);
 
     useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    useEffect(() => {
+        if (!mounted) return;
         const fetchHistory = async () => {
             try {
-                let url = `/api/readings?limit=50&node_id=${selectedNodeId}`;
-                
-                // Si es General (ningún nodo seleccionado), obtener más datos para agregar
-                // Asumimos 4 nodos, por lo que requerimos aprox 200 items (50 timestamps * 4)
-                if (!selectedNodeId) {
-                    url = `/api/readings?limit=200`;
-                } else {
-                    // Validación de nodo específico para evitar cadenas nulas
-                    url = `/api/readings?limit=50&node_id=${selectedNodeId}`;
+                const now = new Date();
+                let startDate = subDays(now, 10).toISOString();
+                let limit = isGeneral ? 2000 : 500;
+
+                if (timeRange === '24h') {
+                    startDate = subDays(now, 1).toISOString();
+                    limit = isGeneral ? 800 : 200;
+                } else if (timeRange === '30d') {
+                    startDate = subDays(now, 30).toISOString();
+                    limit = isGeneral ? 4000 : 1000;
+                } else if (timeRange === '1y') {
+                    startDate = subDays(now, 365).toISOString();
+                    limit = isGeneral ? 12000 : 3000;
+                }
+
+                let url = `/api/readings?start_date=${startDate}&limit=${limit}`;
+                if (selectedNodeId) {
+                    url += `&node_id=${selectedNodeId}`;
                 }
 
                 const res = await fetch(url);
@@ -107,41 +123,42 @@ export default function HistoricalChart() {
                         return;
                     }
 
-                    if (!selectedNodeId) {
-                        // LÓGICA DE AGREGACIÓN PARA PROMEDIO GENERAL
-                        // Agrupar por timestamp
-                        const grouped: Record<number, number[]> = {};
-                        
-                        rawData.forEach((r: any) => {
-                            const ts = new Date(r.timestamp).getTime();
-                            const val = Number(r[selectedParam]) || 0;
-                            if (!grouped[ts]) grouped[ts] = [];
-                            grouped[ts].push(val);
-                        });
+                    // Determinar clave de agrupamiento según el rango de tiempo
+                    const getGroupKey = (timestampStr: string) => {
+                        const d = new Date(timestampStr);
+                        if (timeRange === '24h') {
+                            d.setMinutes(0, 0, 0); // Agrupar por hora
+                            return d.getTime();
+                        } else if (timeRange === '1y') {
+                            d.setDate(1);
+                            d.setHours(0, 0, 0, 0); // Agrupar por mes
+                            return d.getTime();
+                        } else {
+                            d.setHours(0, 0, 0, 0); // Agrupar por día (10d y 30d)
+                            return d.getTime();
+                        }
+                    };
 
-                        // Calcular promedio por timestamp
-                        const aggregated = Object.entries(grouped).map(([ts, values]) => {
-                            const avg = values.reduce((a, b) => a + b, 0) / values.length;
-                            return {
-                                timestamp: Number(ts), // Mantenemos como número
-                                value: Number(avg.toFixed(2))
-                            };
-                        });
+                    // Agrupar y promediar muestras por fecha/hora
+                    const grouped: Record<number, number[]> = {};
+                    rawData.forEach((r: any) => {
+                        const val = Number(r[selectedParam]);
+                        if (val !== undefined && val !== null && !isNaN(val)) {
+                            const key = getGroupKey(r.timestamp);
+                            if (!grouped[key]) grouped[key] = [];
+                            grouped[key].push(val);
+                        }
+                    });
 
-                        // Ordenar por timestamp ascendente
-                        aggregated.sort((a, b) => a.timestamp - b.timestamp);
-                        
-                        setChartData(aggregated);
-
-                    } else {
-                        // LÓGICA PARA NODO INDIVIDUAL
-                        const formatted = rawData.map((r: any) => ({
-                            timestamp: new Date(r.timestamp).getTime(), // Mantenemos como número
-                            value: Number(r[selectedParam]) || 0
-                        })).sort((a: any, b: any) => a.timestamp - b.timestamp);
-                        
-                        setChartData(formatted);
-                    }
+                    const aggregated = Object.entries(grouped).map(([ts, values]) => {
+                        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                        return {
+                            timestamp: Number(ts),
+                            value: Number(avg.toFixed(2))
+                        };
+                    }).sort((a, b) => a.timestamp - b.timestamp);
+                    
+                    setChartData(aggregated);
                 }
             } catch (err) {
                 console.error("Error fetching historical data", err);
@@ -152,16 +169,37 @@ export default function HistoricalChart() {
         
         const interval = setInterval(fetchHistory, 10000);
         return () => clearInterval(interval);
-    }, [selectedNodeId, selectedParam]);
+    }, [selectedNodeId, selectedParam, timeRange, mounted]);
 
     const data = chartData;
 
+    const getXAxisFormatter = () => {
+        if (timeRange === '24h') {
+            return (unixTime: number) => format(unixTime, "HH:mm", { locale: es });
+        } else if (timeRange === '1y') {
+            return (unixTime: number) => format(unixTime, "MMM yy", { locale: es });
+        } else {
+            return (unixTime: number) => format(unixTime, "d MMM", { locale: es });
+        }
+    };
+
+    const getTooltipFormatter = () => {
+        if (timeRange === '24h') {
+            return (unixTime: number) => format(unixTime, "d MMM, HH:00", { locale: es });
+        } else if (timeRange === '1y') {
+            return (unixTime: number) => format(unixTime, "MMMM yyyy", { locale: es });
+        } else {
+            return (unixTime: number) => format(unixTime, "EEEE, d MMM yyyy", { locale: es });
+        }
+    };
+
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
+            const formatter = getTooltipFormatter();
             return (
                 <div className="bg-white/95 backdrop-blur-sm p-3 border border-slate-200 rounded-lg shadow-lg text-sm">
                     <p className="font-bold text-slate-700 mb-1">
-                        {format(label, "d MMM yy, HH:mm", { locale: es })}
+                        {formatter(label)}
                     </p>
                     <p className="font-semibold" style={{ color: '#1e3570' }}>
                         {config.label}: {payload[0].value} {config.unit}
@@ -172,31 +210,70 @@ export default function HistoricalChart() {
         return null;
     };
 
+    if (!mounted) {
+        return (
+            <div className="bg-white rounded-3xl p-6 md:p-8 shadow-xl border border-slate-100 h-[530px] w-full flex flex-col items-center justify-center animate-pulse">
+                <div className="w-16 h-16 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                <p className="text-slate-400 font-bold text-sm">Cargando gráfico histórico...</p>
+            </div>
+        );
+    }
+
     return (
         <div className="bg-white rounded-3xl p-6 md:p-8 shadow-xl border border-slate-100">
             <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-                <div>
-                    <h3 className="text-xl font-bold text-slate-900">Histórico de Lecturas</h3>
-                    <p className="text-sm text-slate-500">
-                        {isGeneral ? "Promedio General de la Red" : `Datos del Sensor ${selectedNodeId}`} • Últimas 24 Horas
-                    </p>
+                <div className="flex justify-between items-center w-full md:w-auto">
+                    <div>
+                        <h3 className="text-xl font-bold text-slate-900">Histórico de Lecturas</h3>
+                        <p className="text-sm text-slate-500">
+                            {isGeneral ? "Promedio General de la Red" : `Datos del Sensor ${selectedNodeId}`} • {
+                                timeRange === '24h' ? 'Últimas 24 Horas' :
+                                timeRange === '10d' ? 'Últimos 10 Días' :
+                                timeRange === '30d' ? 'Últimos 30 Días' : 'Último Año'
+                            }
+                        </p>
+                    </div>
                 </div>
                 
-                {/* Parameter Selector */}
-                <div className="flex flex-wrap gap-2 justify-center">
-                    {Object.entries(PARAM_CONFIG).map(([key, cfg]) => (
-                        <button
-                            key={key}
-                            onClick={() => setSelectedParam(key)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                selectedParam === key
-                                ? 'bg-[#1e3570] text-white shadow-md'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                        >
-                            {cfg.label}
-                        </button>
-                    ))}
+                <div className="flex flex-col sm:flex-row gap-4 items-center w-full md:w-auto">
+                    {/* Selector de Rango de Tiempo (Píldoras) */}
+                    <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200/50 shadow-inner w-fit justify-center">
+                        {[
+                            { key: '24h', label: '24h' },
+                            { key: '10d', label: '10d' },
+                            { key: '30d', label: '30d' },
+                            { key: '1y', label: '1 Año' }
+                        ].map((range) => (
+                            <button
+                                key={range.key}
+                                onClick={() => setTimeRange(range.key as any)}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-300 whitespace-nowrap ${
+                                    timeRange === range.key
+                                    ? 'bg-[#1e3570] text-white shadow-md'
+                                    : 'text-slate-600 hover:bg-slate-200'
+                                }`}
+                            >
+                                {range.label}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Selector de Parámetros */}
+                    <div className="flex flex-wrap gap-2 justify-center">
+                        {Object.entries(PARAM_CONFIG).map(([key, cfg]) => (
+                            <button
+                                key={key}
+                                onClick={() => setSelectedParam(key)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-300 ${
+                                    selectedParam === key
+                                    ? 'bg-[#1e3570] text-white shadow-md'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                            >
+                                {cfg.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -215,16 +292,16 @@ export default function HistoricalChart() {
                             type="number"
                             domain={['dataMin', 'dataMax']}
                             scale="time"
-                            tickFormatter={(unixTime) => format(unixTime, "d MMM yy", { locale: es })}
+                            tickFormatter={getXAxisFormatter()}
                             stroke="#64748b"
-                            fontSize={12}
+                            fontSize={11}
                             tickMargin={10}
                             fontWeight="bold"
                         />
                         <YAxis 
                             domain={[config.min, config.max]} 
                             stroke="#64748b"
-                            fontSize={12}
+                            fontSize={11}
                             unit={config.unit ? ` ${config.unit}` : ''}
                             fontWeight="bold"
                         />
