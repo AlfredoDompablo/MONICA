@@ -582,6 +582,9 @@ static esp_err_t control_handler(httpd_req_t *req) {
             else if (strcmp(var, "colorbar") == 0) menu_idx = 22;
 
             if (menu_idx != -1) {
+                if (menu_idx == 0 && !psramFound()) {
+                    val_int = min(val_int, 8);
+                }
                 menu[menu_idx].currentVal = val_int;
                 if (s_cam) {
                     menu[menu_idx].updateFunc(s_cam, val_int);
@@ -816,10 +819,10 @@ void setup() {
   
   // Reservar buffers de captura según la memoria disponible
   if(psramFound()){
-    Serial.println("[INFO] PSRAM detectada.");
+    Serial.println("[INFO] PSRAM detectada. Usando doble búfer en PSRAM.");
     config.frame_size = FRAMESIZE_QSXGA; 
     config.jpeg_quality = 14;            ///< Mayor fidelidad inicial (14)
-    config.fb_count = 1; 
+    config.fb_count = 2;                 ///< Doble búfer necesario para CAMERA_GRAB_LATEST de forma estable
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
@@ -827,6 +830,7 @@ void setup() {
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 12;
     config.fb_count = 1;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
@@ -975,6 +979,9 @@ void loop() {
       
       if (parsed >= 3) {
         res = constrain(res, 0, 21);
+        if (!psramFound()) {
+          res = min(res, 8); // Limit to VGA if no PSRAM
+        }
         br = constrain(br, -2, 2);
         co = constrain(co, -2, 2);
         if (parsed >= 4) qty = constrain(qty, 10, 63);
@@ -1145,12 +1152,14 @@ void takeAndSendPhoto() {
   }
 
   // Capturas de descarte para estabilización automática de brillo y ganancia del lente CMOS
-  for (int i = 0; i < 20; i++) {
+  // Reducido a 2 descartes rápidos en PSRAM o 5 en DRAM para evitar demoras y fallos en alta resolución
+  int discardCount = psramFound() ? 2 : 5;
+  for (int i = 0; i < discardCount; i++) {
     camera_fb_t * fb = esp_camera_fb_get();
     if (fb) {
       esp_camera_fb_return(fb);
     }
-    delay(50); 
+    delay(10); 
   }
 
   currentFb = esp_camera_fb_get();

@@ -536,7 +536,11 @@ static esp_err_t control_handler(httpd_req_t *req) {
             int val_int = atoi(val);
             sensor_t * s_cam = esp_camera_sensor_get();
             if (s_cam) {
-                if (strcmp(var, "framesize") == 0) { currentFrameSize = val_int; s_cam->set_framesize(s_cam, (framesize_t)val_int); }
+                if (strcmp(var, "framesize") == 0) {
+                    if (!psramFound()) val_int = min(val_int, 8);
+                    currentFrameSize = val_int;
+                    s_cam->set_framesize(s_cam, (framesize_t)val_int);
+                }
                 else if (strcmp(var, "brightness") == 0) { camBrightness = val_int; s_cam->set_brightness(s_cam, val_int); }
                 else if (strcmp(var, "contrast") == 0) { camContrast = val_int; s_cam->set_contrast(s_cam, val_int); }
                 else if (strcmp(var, "quality") == 0) { camQuality = val_int; s_cam->set_quality(s_cam, val_int); }
@@ -756,14 +760,13 @@ void setup() {
   // Asignar el búfer físico dinámicamente dependiendo de la presencia de
   // memoria PSRAM externa
   if (psramFound()) {
-    Serial.println("[INFO] PSRAM detectada. Habilitando soporte para "
-                   "resoluciones ultra altas.");
+    Serial.println("[INFO] PSRAM detectada. Usando doble búfer en PSRAM.");
     config.frame_size = FRAMESIZE_QSXGA; ///< Permite escalamientos dinámicos
                                          ///< hasta 5 MegaPíxeles
     config.jpeg_quality =
         14; ///< Calidad de imagen JPEG inicial balanceada (24)
     config.fb_count =
-        1; ///< Búfer único para minimizar la huella de memoria PSRAM
+        2; ///< Doble búfer necesario para CAMERA_GRAB_LATEST de forma estable
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
@@ -772,6 +775,7 @@ void setup() {
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 12;
     config.fb_count = 1;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
@@ -939,6 +943,9 @@ void loop() {
 
       if (parsed >= 3) {
         res = constrain(res, 0, 21);
+        if (!psramFound()) {
+          res = min(res, 8); // Limit to VGA if no PSRAM
+        }
         br = constrain(br, -2, 2);
         co = constrain(co, -2, 2);
         if (parsed >= 4)
@@ -1049,13 +1056,14 @@ void takeAndSendPhoto() {
   }
 
   // Capturas de descarte para estabilización automática de brillo y ganancia
-  // del lente CMOS
-  for (int i = 0; i < 20; i++) {
+  // del lente CMOS. Reducido a 2 descartes rápidos en PSRAM o 5 en DRAM para evitar demoras y fallos.
+  int discardCount = psramFound() ? 2 : 5;
+  for (int i = 0; i < discardCount; i++) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb) {
       esp_camera_fb_return(fb);
     }
-    delay(50);
+    delay(10);
   }
 
   // Captura del cuadro final útil
