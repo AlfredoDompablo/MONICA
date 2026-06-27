@@ -24,6 +24,7 @@ enum PacketType : uint8_t {
     CMD_REQ_IMAGE     = 0x12,
     CMD_REQ_MISSING   = 0x13, // Concentrador -> Nodo (Petición de fragmentos perdidos)
     CMD_CONFIG_CAM    = 0x14, // Concentrador -> Nodo (Configuración de la cámara)
+    CMD_GET_CAM_CONFIG = 0x15, // Concentrador -> Nodo (Obtener configuración de la cámara)
     
     // Respuestas (Nodo -> Concentrador)
     ACK               = 0x20,
@@ -31,7 +32,8 @@ enum PacketType : uint8_t {
     DATA_TELEMETRY    = 0x30,
     DATA_IMG_START    = 0x31,
     DATA_IMG_CHUNK    = 0x32,
-    DATA_IMG_END      = 0x33
+    DATA_IMG_END      = 0x33,
+    DATA_CAM_CONFIG   = 0x34  // Nodo -> Concentrador (Configuración devuelta)
 };
 
 // Secuencia de Sincronización para filtrar ruido

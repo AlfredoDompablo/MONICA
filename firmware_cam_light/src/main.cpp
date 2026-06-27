@@ -886,6 +886,39 @@ void loop() {
       }
     }
     // ------------------------------------------------------------------------
+    // COMANDO: GET_CONFIG
+    // Devuelve todos los parámetros del sensor.
+    // ------------------------------------------------------------------------
+    else if (cmd == "GET_CONFIG") {
+      sensor_t * s = esp_camera_sensor_get();
+      int res = currentFrameSize;
+      int br = camBrightness;
+      int co = camContrast;
+      int qty = s ? s->status.quality : camQuality;
+      int sa = camSaturation;
+      int ef = camSpecialEffect;
+      int wb = camWhitebal;
+      int aw = camAwbGain;
+      int wm = camWbMode;
+      int ec = camExposureCtrl;
+      int a2 = camAec2;
+      int al = camAeLevel;
+      int av = camAecValue;
+      int gc = camGainCtrl;
+      int ag = camAgcGain;
+      int gl = camGainceiling;
+      int bp = camBpc;
+      int wp = camWpc;
+      int rg = camRawGma;
+      int lc = camLenc;
+      int hm = camHmirror;
+      int vf = camVflip;
+      int dw = camDcw;
+      int cb = camColorbar;
+      heltecSerial.printf("CONFIG_RESP %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                          res, br, co, qty, sa, ef, wb, aw, wm, ec, a2, al, av, gc, ag, gl, bp, wp, rg, lc, hm, vf, dw, cb);
+    }
+    // ------------------------------------------------------------------------
     // COMANDO: SET_CONFIG <res> <br> <co> <qty> <sa> <ef> <wb> <aw> <wm> <ec>
     // <a2> <al> <av> <gc> <ag> <gl> <bp> <wp> <rg> <lc> <hm> <vf> <dw> <cb>
     // Configura todos los parámetros del sensor.

@@ -1123,6 +1123,160 @@ void handleLoRa() {
                 radio.startReceive();
                 Serial.println("[LORA WARNING] Enviado NACK (CAMERA_TIMEOUT) al concentrador.");
               }
+            } else if (rxPacket.header.type == CMD_GET_CAM_CONFIG) {
+              delay(80);
+              Serial.println("[CAMERA DEBUG] Encendiendo camara para lectura de configuracion (CAM_EN = HIGH)...");
+              digitalWrite(CAM_EN, HIGH);
+              delay(2000); // Esperar que arranque la camara
+
+              // Vaciar buffer RX
+              while (camSerial.available()) camSerial.read();
+
+              // Enviar peticion por serial
+              Serial.println("[CAMERA] Solicitando configuracion a la camara...");
+              camSerial.println("GET_CONFIG");
+
+              // Esperar respuesta
+              unsigned long configStart = millis();
+              bool gotConfig = false;
+              int res = 10, br = 0, co = 1, qty = 24;
+              int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0, al = 0, av = 300;
+              int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1, hm = 0, vf = 0, dw = 1, cb = 0;
+
+              while (millis() - configStart < 1500) {
+                if (camSerial.available()) {
+                  String resp = camSerial.readStringUntil('\n');
+                  resp.trim();
+                  if (resp.startsWith("CONFIG_RESP")) {
+                    int parsed = sscanf(resp.c_str() + 12,
+                                         "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+                                         &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm, &ec, &a2, &al, &av, &gc, &ag, &gl, &bp, &wp, &rg, &lc, &hm, &vf, &dw, &cb);
+                    if (parsed >= 24) {
+                      gotConfig = true;
+                      break;
+                    }
+                  }
+                }
+                delay(5);
+              }
+              Serial.printf("[CAMERA] Lectura de configuracion remota: %s\n", gotConfig ? "OK" : "TIMEOUT");
+
+              // Apagar la camara para ahorrar energia
+              digitalWrite(CAM_EN, LOW);
+
+              if (gotConfig) {
+                // Guardar en Preferences de forma permanente para mantener sincronía
+                cam_resolution = res;
+                cam_brightness = br;
+                cam_contrast = co;
+                cam_quality = qty;
+                cam_saturation = sa;
+                cam_special_effect = ef;
+                cam_whitebal = wb;
+                cam_awb_gain = aw;
+                cam_wb_mode = wm;
+                cam_exposure_ctrl = ec;
+                cam_aec2 = a2;
+                cam_ae_level = al;
+                cam_aec_value = av;
+                cam_gain_ctrl = gc;
+                cam_agc_gain = ag;
+                cam_gainceiling = gl;
+                cam_bpc = bp;
+                cam_wpc = wp;
+                cam_raw_gma = rg;
+                cam_lenc = lc;
+                cam_hmirror = hm;
+                cam_vflip = vf;
+                cam_dcw = dw;
+                cam_colorbar = cb;
+
+                preferences.begin("cam_config", false);
+                preferences.putUChar("res", cam_resolution);
+                preferences.putChar("br", cam_brightness);
+                preferences.putChar("co", cam_contrast);
+                preferences.putUChar("qty", cam_quality);
+                preferences.putChar("sat", cam_saturation);
+                preferences.putUChar("ef", cam_special_effect);
+                preferences.putUChar("wb", cam_whitebal);
+                preferences.putUChar("awg", cam_awb_gain);
+                preferences.putUChar("wbm", cam_wb_mode);
+                preferences.putUChar("ec", cam_exposure_ctrl);
+                preferences.putUChar("aec2", cam_aec2);
+                preferences.putChar("ael", cam_ae_level);
+                preferences.putUShort("aev", cam_aec_value);
+                preferences.putUChar("gc", cam_gain_ctrl);
+                preferences.putUChar("agg", cam_agc_gain);
+                preferences.putUChar("gcl", cam_gainceiling);
+                preferences.putUChar("bpc", cam_bpc);
+                preferences.putUChar("wpc", cam_wpc);
+                preferences.putUChar("rgm", cam_raw_gma);
+                preferences.putUChar("lnc", cam_lenc);
+                preferences.putUChar("hmr", cam_hmirror);
+                preferences.putUChar("vfl", cam_vflip);
+                preferences.putUChar("dcw", cam_dcw);
+                preferences.putUChar("cbr", cam_colorbar);
+                preferences.end();
+
+                // Responder con la configuracion al concentrador
+                LoRaPacket respPacket;
+                respPacket.header.syncWord[0] = LORA_SYNC_0;
+                respPacket.header.syncWord[1] = LORA_SYNC_1;
+                respPacket.header.srcId = MY_NODE_ID;
+                respPacket.header.destId = rxPacket.header.srcId;
+                respPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
+                                                 ? (MY_NODE_ID - 1)
+                                                 : (MY_NODE_ID + 1);
+                respPacket.header.type = DATA_CAM_CONFIG;
+                respPacket.header.seqNum = packetSequence++;
+                respPacket.header.ttl = 5;
+
+                CameraConfigPayload *ccp = (CameraConfigPayload *)respPacket.payload;
+                ccp->resolution = res;
+                ccp->brightness = br;
+                ccp->contrast = co;
+                ccp->quality = qty;
+                ccp->saturation = sa;
+                ccp->special_effect = ef;
+                ccp->whitebal = wb;
+                ccp->awb_gain = aw;
+                ccp->wb_mode = wm;
+                ccp->exposure_ctrl = ec;
+                ccp->aec2 = a2;
+                ccp->ae_level = al;
+                ccp->aec_value = av;
+                ccp->gain_ctrl = gc;
+                ccp->agc_gain = ag;
+                ccp->gainceiling = gl;
+                ccp->bpc = bp;
+                ccp->wpc = wp;
+                ccp->raw_gma = rg;
+                ccp->lenc = lc;
+                ccp->hmirror = hm;
+                ccp->vflip = vf;
+                ccp->dcw = dw;
+                ccp->colorbar = cb;
+
+                radio.transmit((uint8_t *)&respPacket, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+                radio.startReceive();
+                Serial.println("[LORA] Enviada configuracion de camara leida con exito al concentrador.");
+              } else {
+                LoRaPacket nackPacket;
+                nackPacket.header.syncWord[0] = LORA_SYNC_0;
+                nackPacket.header.syncWord[1] = LORA_SYNC_1;
+                nackPacket.header.srcId = MY_NODE_ID;
+                nackPacket.header.destId = rxPacket.header.srcId;
+                nackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
+                                                 ? (MY_NODE_ID - 1)
+                                                 : (MY_NODE_ID + 1);
+                nackPacket.header.type = NACK;
+                nackPacket.header.seqNum = packetSequence++;
+                nackPacket.header.ttl = 5;
+                strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
+                radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
+                radio.startReceive();
+                Serial.println("[LORA WARNING] Fallo al leer camara, enviado NACK.");
+              }
             } else if (rxPacket.header.type == CMD_PING) {
               delay(80);
               LoRaPacket ackPacket;

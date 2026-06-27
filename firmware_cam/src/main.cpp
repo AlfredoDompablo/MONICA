@@ -931,9 +931,38 @@ void loop() {
       display.clearDisplay();
       display.setCursor(0, 0);
       display.println("Foto Liberada");
-      display.display();
       delay(500);
       updateMenu();
+    }
+    // Comando: GET_CONFIG
+    else if (cmd == "GET_CONFIG") {
+      sensor_t * s = esp_camera_sensor_get();
+      int res = menu[0].currentVal;
+      int br = menu[1].currentVal;
+      int co = menu[2].currentVal;
+      int qty = s ? s->status.quality : 14;
+      int sa = menu[3].currentVal;
+      int ef = menu[4].currentVal;
+      int wb = menu[5].currentVal;
+      int aw = menu[6].currentVal;
+      int wm = menu[7].currentVal;
+      int ec = menu[8].currentVal;
+      int a2 = menu[9].currentVal;
+      int al = menu[10].currentVal;
+      int av = menu[11].currentVal;
+      int gc = menu[12].currentVal;
+      int ag = menu[13].currentVal;
+      int gl = menu[14].currentVal;
+      int bp = menu[15].currentVal;
+      int wp = menu[16].currentVal;
+      int rg = menu[17].currentVal;
+      int lc = menu[18].currentVal;
+      int hm = menu[19].currentVal;
+      int vf = menu[20].currentVal;
+      int dw = menu[21].currentVal;
+      int cb = menu[22].currentVal;
+      heltecSerial.printf("CONFIG_RESP %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                          res, br, co, qty, sa, ef, wb, aw, wm, ec, a2, al, av, gc, ag, gl, bp, wp, rg, lc, hm, vf, dw, cb);
     }
     // Comando: SET_CONFIG <res> <br> <co> <qty> <sa> <ef> <wb> <aw> <wm> <ec> <a2> <al> <av> <gc> <ag> <gl> <bp> <wp> <rg> <lc> <hm> <vf> <dw> <cb>
     else if (cmd.startsWith("SET_CONFIG")) {

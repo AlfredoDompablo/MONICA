@@ -121,6 +121,8 @@ int activeImageCommandId = 0;            ///< ID del comando web que solicitó l
 volatile bool isGpsNotFixed = false;     ///< Indica si el nodo sensor respondió que no tiene fix de GPS
 volatile bool lastResponseWasNack = false; ///< Indica si la última respuesta recibida fue un NACK
 String lastNackMsg = "";                  ///< Contenido del último mensaje NACK recibido
+volatile bool gotCamConfigData = false;
+CameraConfigPayload lastCamConfig;
 
 
 unsigned long lastPollTime = 0;          ///< Última vez que se sondeó un nodo
@@ -936,6 +938,18 @@ void handleLoRa() {
                             responseReceived = true; 
                         }
                     }
+                    // Configuración de cámara devuelta por el nodo
+                    else if (packet.header.type == DATA_CAM_CONFIG) {
+                        setScreenStatus("CFG RECIBIDA", "Nodo " + String(packet.header.srcId), "Datos de camara OK");
+                        if (payloadLen >= sizeof(CameraConfigPayload)) {
+                            CameraConfigPayload* ccp = (CameraConfigPayload*)packet.payload;
+                            memcpy(&lastCamConfig, ccp, sizeof(CameraConfigPayload));
+                            gotCamConfigData = true;
+                        }
+                        if (packet.header.srcId == targetNode) {
+                            responseReceived = true;
+                        }
+                    }
                     // NACK / Respuesta de error del nodo
                     else if (packet.header.type == NACK) {
                         char payloadBuf[LORA_MAX_PAYLOAD + 1];
@@ -1267,6 +1281,98 @@ void checkPendingCommands() {
             if (success) {
                 sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
             } else {
+                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+            }
+        }
+        else if (type == "GET_CAMERA_CONFIG") {
+            LoRaPacket packet;
+            memset(&packet, 0, sizeof(LoRaHeader));
+            packet.header.syncWord[0] = LORA_SYNC_0;
+            packet.header.syncWord[1] = LORA_SYNC_1;
+            packet.header.srcId = MY_NODE_ID; 
+            packet.header.destId = nodeNum;
+            packet.header.nextHopId = 1; 
+            packet.header.type = CMD_GET_CAM_CONFIG;
+            packet.header.seqNum = packetSequence++;
+            packet.header.ttl = 5;
+            
+            responseReceived = false;
+            lastResponseWasNack = false;
+            lastNackMsg = "";
+            gotCamConfigData = false;
+            targetNode = nodeNum;
+            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+            radio.startReceive();
+            
+            unsigned long waitStart = millis();
+            while (millis() - waitStart < 5000) {
+                smartDelay(10);
+                handleLoRa();
+                if (responseReceived) {
+                    if (lastResponseWasNack) {
+                        success = false;
+                        if (lastNackMsg == "CAMERA_TIMEOUT") {
+                            responseMsg = "Error: La cámara no respondió (Timeout al leer configuración).";
+                        } else {
+                            responseMsg = "Error al leer cámara: " + lastNackMsg;
+                        }
+                    } else if (gotCamConfigData) {
+                        success = true;
+                        responseMsg = "Configuración de cámara obtenida con éxito.";
+                    }
+                    break;
+                }
+            }
+            if (!success && responseMsg == "") {
+                responseMsg = "Timeout: Sin respuesta del nodo sensor.";
+            }
+
+            if (success) {
+                HTTPClient http;
+                String url = String(API_URL);
+                url.replace("/api/sensor-readings", "/api/network/commands/" + String(commandId));
+                http.begin(url);
+                http.addHeader("Content-Type", "application/json");
+                http.addHeader("x-api-key", API_KEY);
+                
+                DynamicJsonDocument doc(1024);
+                doc["status"] = "COMPLETED";
+                doc["response"] = responseMsg;
+                
+                JsonObject paramsObj = doc.createNestedObject("parameters");
+                paramsObj["resolution"] = lastCamConfig.resolution;
+                paramsObj["brightness"] = lastCamConfig.brightness;
+                paramsObj["contrast"] = lastCamConfig.contrast;
+                paramsObj["quality"] = lastCamConfig.quality;
+                paramsObj["saturation"] = lastCamConfig.saturation;
+                paramsObj["special_effect"] = lastCamConfig.special_effect;
+                paramsObj["whitebal"] = lastCamConfig.whitebal;
+                paramsObj["awb_gain"] = lastCamConfig.awb_gain;
+                paramsObj["wb_mode"] = lastCamConfig.wb_mode;
+                paramsObj["exposure_ctrl"] = lastCamConfig.exposure_ctrl;
+                paramsObj["aec2"] = lastCamConfig.aec2;
+                paramsObj["ae_level"] = lastCamConfig.ae_level;
+                paramsObj["aec_value"] = lastCamConfig.aec_value;
+                paramsObj["gain_ctrl"] = lastCamConfig.gain_ctrl;
+                paramsObj["agc_gain"] = lastCamConfig.agc_gain;
+                paramsObj["gainceiling"] = lastCamConfig.gainceiling;
+                paramsObj["bpc"] = lastCamConfig.bpc;
+                paramsObj["wpc"] = lastCamConfig.wpc;
+                paramsObj["raw_gma"] = lastCamConfig.raw_gma;
+                paramsObj["lenc"] = lastCamConfig.lenc;
+                paramsObj["hmirror"] = lastCamConfig.hmirror;
+                paramsObj["vflip"] = lastCamConfig.vflip;
+                paramsObj["dcw"] = lastCamConfig.dcw;
+                paramsObj["colorbar"] = lastCamConfig.colorbar;
+                
+                String jsonOutput;
+                serializeJson(doc, jsonOutput);
+                http.PUT(jsonOutput);
+                http.end();
+                
+                sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+            } else {
+                updateCommandStatus(commandId, "FAILED", responseMsg);
                 sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
             }
         }
@@ -1655,6 +1761,98 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       if (success) {
           sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
       } else {
+          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+      }
+  }
+  else if (type == "GET_CAMERA_CONFIG") {
+      LoRaPacket packet;
+      memset(&packet, 0, sizeof(LoRaHeader));
+      packet.header.syncWord[0] = LORA_SYNC_0;
+      packet.header.syncWord[1] = LORA_SYNC_1;
+      packet.header.srcId = MY_NODE_ID; 
+      packet.header.destId = nodeNum;
+      packet.header.nextHopId = 1; 
+      packet.header.type = CMD_GET_CAM_CONFIG;
+      packet.header.seqNum = packetSequence++;
+      packet.header.ttl = 5;
+      
+      responseReceived = false;
+      lastResponseWasNack = false;
+      lastNackMsg = "";
+      gotCamConfigData = false;
+      targetNode = nodeNum;
+      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+      radio.startReceive();
+      
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 5000) {
+          smartDelay(10);
+          handleLoRa();
+          if (responseReceived) {
+              if (lastResponseWasNack) {
+                  success = false;
+                  if (lastNackMsg == "CAMERA_TIMEOUT") {
+                      responseMsg = "Error: La cámara no respondió (Timeout al leer configuración).";
+                  } else {
+                      responseMsg = "Error al leer cámara: " + lastNackMsg;
+                  }
+              } else if (gotCamConfigData) {
+                  success = true;
+                  responseMsg = "Configuración de cámara obtenida con éxito.";
+              }
+              break;
+          }
+      }
+      if (!success && responseMsg == "") {
+          responseMsg = "Timeout: Sin respuesta del nodo sensor.";
+      }
+
+      if (success) {
+          HTTPClient http;
+          String url = String(API_URL);
+          url.replace("/api/sensor-readings", "/api/network/commands/" + String(commandId));
+          http.begin(url);
+          http.addHeader("Content-Type", "application/json");
+          http.addHeader("x-api-key", API_KEY);
+          
+          DynamicJsonDocument doc(1024);
+          doc["status"] = "COMPLETED";
+          doc["response"] = responseMsg;
+          
+          JsonObject paramsObj = doc.createNestedObject("parameters");
+          paramsObj["resolution"] = lastCamConfig.resolution;
+          paramsObj["brightness"] = lastCamConfig.brightness;
+          paramsObj["contrast"] = lastCamConfig.contrast;
+          paramsObj["quality"] = lastCamConfig.quality;
+          paramsObj["saturation"] = lastCamConfig.saturation;
+          paramsObj["special_effect"] = lastCamConfig.special_effect;
+          paramsObj["whitebal"] = lastCamConfig.whitebal;
+          paramsObj["awb_gain"] = lastCamConfig.awb_gain;
+          paramsObj["wb_mode"] = lastCamConfig.wb_mode;
+          paramsObj["exposure_ctrl"] = lastCamConfig.exposure_ctrl;
+          paramsObj["aec2"] = lastCamConfig.aec2;
+          paramsObj["ae_level"] = lastCamConfig.ae_level;
+          paramsObj["aec_value"] = lastCamConfig.aec_value;
+          paramsObj["gain_ctrl"] = lastCamConfig.gain_ctrl;
+          paramsObj["agc_gain"] = lastCamConfig.agc_gain;
+          paramsObj["gainceiling"] = lastCamConfig.gainceiling;
+          paramsObj["bpc"] = lastCamConfig.bpc;
+          paramsObj["wpc"] = lastCamConfig.wpc;
+          paramsObj["raw_gma"] = lastCamConfig.raw_gma;
+          paramsObj["lenc"] = lastCamConfig.lenc;
+          paramsObj["hmirror"] = lastCamConfig.hmirror;
+          paramsObj["vflip"] = lastCamConfig.vflip;
+          paramsObj["dcw"] = lastCamConfig.dcw;
+          paramsObj["colorbar"] = lastCamConfig.colorbar;
+          
+          String jsonOutput;
+          serializeJson(doc, jsonOutput);
+          http.PUT(jsonOutput);
+          http.end();
+          
+          sendNetworkLog("SUCCESS", "Comando " + type + " ejecutado con éxito: " + responseMsg, targetNodeId);
+      } else {
+          updateCommandStatus(commandId, "FAILED", responseMsg);
           sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
       }
   }
