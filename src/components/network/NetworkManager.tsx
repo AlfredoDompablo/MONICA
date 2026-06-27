@@ -74,6 +74,7 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     const [cameraDcw, setCameraDcw] = useState<number>(1);
     const [cameraColorbar, setCameraColorbar] = useState<number>(0);
     const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+    const [isSynced, setIsSynced] = useState<boolean>(false);
 
     // Cargar Logs y Comandos desde la API
     const fetchData = useCallback(async () => {
@@ -102,42 +103,58 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     // Cargar la última configuración de cámara del nodo seleccionado al cambiar de nodo
     useEffect(() => {
         if (!selectedNode) return;
+        setIsSynced(false); // Bloquear al cambiar de nodo
         
         const fetchLastConfig = async () => {
             try {
-                const res = await fetch(`/api/network/commands?limit=1&node_id=${selectedNode}&type=CONFIG_CAMERA`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.length > 0) {
-                        const cmd = data[0];
-                        if (cmd.parameters) {
-                            const params = JSON.parse(cmd.parameters);
-                            if (params.resolution !== undefined) setCameraResolution(Number(params.resolution));
-                            if (params.brightness !== undefined) setCameraBrightness(Number(params.brightness));
-                            if (params.contrast !== undefined) setCameraContrast(Number(params.contrast));
-                            if (params.quality !== undefined) setCameraQuality(Number(params.quality));
-                            if (params.saturation !== undefined) setCameraSaturation(Number(params.saturation));
-                            if (params.special_effect !== undefined) setCameraSpecialEffect(Number(params.special_effect));
-                            if (params.whitebal !== undefined) setCameraWhitebal(Number(params.whitebal));
-                            if (params.awb_gain !== undefined) setCameraAwbGain(Number(params.awb_gain));
-                            if (params.wb_mode !== undefined) setCameraWbMode(Number(params.wb_mode));
-                            if (params.exposure_ctrl !== undefined) setCameraExposureCtrl(Number(params.exposure_ctrl));
-                            if (params.aec2 !== undefined) setCameraAec2(Number(params.aec2));
-                            if (params.ae_level !== undefined) setCameraAeLevel(Number(params.ae_level));
-                            if (params.aec_value !== undefined) setCameraAecValue(Number(params.aec_value));
-                            if (params.gain_ctrl !== undefined) setCameraGainCtrl(Number(params.gain_ctrl));
-                            if (params.agc_gain !== undefined) setCameraAgcGain(Number(params.agc_gain));
-                            if (params.gainceiling !== undefined) setCameraGainceiling(Number(params.gainceiling));
-                            if (params.bpc !== undefined) setCameraBpc(Number(params.bpc));
-                            if (params.wpc !== undefined) setCameraWpc(Number(params.wpc));
-                            if (params.raw_gma !== undefined) setCameraRawGma(Number(params.raw_gma));
-                            if (params.lenc !== undefined) setCameraLenc(Number(params.lenc));
-                            if (params.hmirror !== undefined) setCameraHmirror(Number(params.hmirror));
-                            if (params.vflip !== undefined) setCameraVflip(Number(params.vflip));
-                            if (params.dcw !== undefined) setCameraDcw(Number(params.dcw));
-                            if (params.colorbar !== undefined) setCameraColorbar(Number(params.colorbar));
+                const resConfig = await fetch(`/api/network/commands?limit=1&node_id=${selectedNode}&type=CONFIG_CAMERA`);
+                const resGet = await fetch(`/api/network/commands?limit=1&node_id=${selectedNode}&type=GET_CAMERA_CONFIG`);
+                
+                let latestCmd = null;
+                
+                if (resConfig.ok) {
+                    const data = await resConfig.json();
+                    if (data && data.length > 0 && data[0].status === 'COMPLETED') {
+                        latestCmd = data[0];
+                    }
+                }
+                
+                if (resGet.ok) {
+                    const data = await resGet.json();
+                    if (data && data.length > 0 && data[0].status === 'COMPLETED') {
+                        const getCmd = data[0];
+                        if (!latestCmd || new Date(getCmd.timestamp) > new Date(latestCmd.timestamp)) {
+                            latestCmd = getCmd;
                         }
                     }
+                }
+
+                if (latestCmd && latestCmd.parameters) {
+                    const params = typeof latestCmd.parameters === 'string' ? JSON.parse(latestCmd.parameters) : latestCmd.parameters;
+                    if (params.resolution !== undefined) setCameraResolution(Number(params.resolution));
+                    if (params.brightness !== undefined) setCameraBrightness(Number(params.brightness));
+                    if (params.contrast !== undefined) setCameraContrast(Number(params.contrast));
+                    if (params.quality !== undefined) setCameraQuality(Number(params.quality));
+                    if (params.saturation !== undefined) setCameraSaturation(Number(params.saturation));
+                    if (params.special_effect !== undefined) setCameraSpecialEffect(Number(params.special_effect));
+                    if (params.whitebal !== undefined) setCameraWhitebal(Number(params.whitebal));
+                    if (params.awb_gain !== undefined) setCameraAwbGain(Number(params.awb_gain));
+                    if (params.wb_mode !== undefined) setCameraWbMode(Number(params.wb_mode));
+                    if (params.exposure_ctrl !== undefined) setCameraExposureCtrl(Number(params.exposure_ctrl));
+                    if (params.aec2 !== undefined) setCameraAec2(Number(params.aec2));
+                    if (params.ae_level !== undefined) setCameraAeLevel(Number(params.ae_level));
+                    if (params.aec_value !== undefined) setCameraAecValue(Number(params.aec_value));
+                    if (params.gain_ctrl !== undefined) setCameraGainCtrl(Number(params.gain_ctrl));
+                    if (params.agc_gain !== undefined) setCameraAgcGain(Number(params.agc_gain));
+                    if (params.gainceiling !== undefined) setCameraGainceiling(Number(params.gainceiling));
+                    if (params.bpc !== undefined) setCameraBpc(Number(params.bpc));
+                    if (params.wpc !== undefined) setCameraWpc(Number(params.wpc));
+                    if (params.raw_gma !== undefined) setCameraRawGma(Number(params.raw_gma));
+                    if (params.lenc !== undefined) setCameraLenc(Number(params.lenc));
+                    if (params.hmirror !== undefined) setCameraHmirror(Number(params.hmirror));
+                    if (params.vflip !== undefined) setCameraVflip(Number(params.vflip));
+                    if (params.dcw !== undefined) setCameraDcw(Number(params.dcw));
+                    if (params.colorbar !== undefined) setCameraColorbar(Number(params.colorbar));
                 }
             } catch (error) {
                 console.error('Error fetching last camera config:', error);
@@ -207,6 +224,98 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
         } catch (error) {
             console.error('Error sending command:', error);
         } finally {
+            setIsSending(false);
+        }
+    };
+
+    const handleSyncCameraConfig = async () => {
+        if (!selectedNode) return;
+        setIsSending(true);
+        setIsSynced(false);
+        try {
+            const response = await fetch('/api/network/commands', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    type: 'GET_CAMERA_CONFIG',
+                    target_node_id: selectedNode,
+                }),
+            });
+
+            if (response.ok) {
+                const newCmd = await response.json();
+                const commandId = newCmd.command_id;
+                
+                // Polling del comando hasta que se complete o falle (máximo 15 segundos)
+                const startTime = Date.now();
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const statusRes = await fetch(`/api/network/commands/${commandId}`);
+                        if (statusRes.ok) {
+                            const cmd = await statusRes.json();
+                            if (cmd.status === 'COMPLETED') {
+                                clearInterval(pollInterval);
+                                setIsSending(false);
+                                
+                                if (cmd.parameters) {
+                                    const params = typeof cmd.parameters === 'string' ? JSON.parse(cmd.parameters) : cmd.parameters;
+                                    if (params.resolution !== undefined) setCameraResolution(Number(params.resolution));
+                                    if (params.brightness !== undefined) setCameraBrightness(Number(params.brightness));
+                                    if (params.contrast !== undefined) setCameraContrast(Number(params.contrast));
+                                    if (params.quality !== undefined) setCameraQuality(Number(params.quality));
+                                    if (params.saturation !== undefined) setCameraSaturation(Number(params.saturation));
+                                    if (params.special_effect !== undefined) setCameraSpecialEffect(Number(params.special_effect));
+                                    if (params.whitebal !== undefined) setCameraWhitebal(Number(params.whitebal));
+                                    if (params.awb_gain !== undefined) setCameraAwbGain(Number(params.awb_gain));
+                                    if (params.wb_mode !== undefined) setCameraWbMode(Number(params.wb_mode));
+                                    if (params.exposure_ctrl !== undefined) setCameraExposureCtrl(Number(params.exposure_ctrl));
+                                    if (params.aec2 !== undefined) setCameraAec2(Number(params.aec2));
+                                    if (params.ae_level !== undefined) setCameraAeLevel(Number(params.ae_level));
+                                    if (params.aec_value !== undefined) setCameraAecValue(Number(params.aec_value));
+                                    if (params.gain_ctrl !== undefined) setCameraGainCtrl(Number(params.gain_ctrl));
+                                    if (params.agc_gain !== undefined) setCameraAgcGain(Number(params.agc_gain));
+                                    if (params.gainceiling !== undefined) setCameraGainceiling(Number(params.gainceiling));
+                                    if (params.bpc !== undefined) setCameraBpc(Number(params.bpc));
+                                    if (params.wpc !== undefined) setCameraWpc(Number(params.wpc));
+                                    if (params.raw_gma !== undefined) setCameraRawGma(Number(params.raw_gma));
+                                    if (params.lenc !== undefined) setCameraLenc(Number(params.lenc));
+                                    if (params.hmirror !== undefined) setCameraHmirror(Number(params.hmirror));
+                                    if (params.vflip !== undefined) setCameraVflip(Number(params.vflip));
+                                    if (params.dcw !== undefined) setCameraDcw(Number(params.dcw));
+                                    if (params.colorbar !== undefined) setCameraColorbar(Number(params.colorbar));
+                                    
+                                    setIsSynced(true);
+                                }
+                                fetchData();
+                            } else if (cmd.status === 'FAILED') {
+                                clearInterval(pollInterval);
+                                setIsSending(false);
+                                alert(`Error al sincronizar: ${cmd.response || 'El concentrador reportó un fallo.'}`);
+                                fetchData();
+                            }
+                        }
+                    } catch (pollErr) {
+                        console.error('Error polling command status:', pollErr);
+                    }
+
+                    // Timeout después de 15 segundos
+                    if (Date.now() - startTime > 15000) {
+                        clearInterval(pollInterval);
+                        setIsSending(false);
+                        alert('Timeout: La cámara o el nodo tardaron demasiado en responder.');
+                        fetchData();
+                    }
+                }, 1500);
+
+            } else {
+                const err = await response.json();
+                alert(`Error: ${err.error || 'No se pudo enviar la solicitud de sincronización'}`);
+                setIsSending(false);
+            }
+        } catch (error) {
+            console.error('Error sending sync command:', error);
             setIsSending(false);
         }
     };
@@ -368,7 +477,24 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
 
                         {commandType === 'CONFIG_CAMERA' && (
                             <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 space-y-4 animate-fadeIn">
-                                <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Parámetros de la Cámara</h3>
+                                <div className="flex justify-between items-center mb-1">
+                                    <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Parámetros de la Cámara</h3>
+                                    <button
+                                        type="button"
+                                        disabled={isSending || !selectedNode}
+                                        onClick={handleSyncCameraConfig}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg text-indigo-750 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition disabled:opacity-50"
+                                    >
+                                        <RefreshCw className={`w-3 h-3 ${isSending ? 'animate-spin' : ''}`} />
+                                        Sincronizar Ajustes
+                                    </button>
+                                </div>
+                                {!isSynced && (
+                                    <p className="text-[10px] text-amber-750 font-bold bg-amber-50/80 border border-amber-200/70 rounded-lg p-2.5 animate-fadeIn flex items-center gap-1.5">
+                                        ⚠️ Por favor, sincroniza los ajustes para cargar y habilitar la edición de parámetros.
+                                    </p>
+                                )}
+                                <fieldset disabled={!isSynced || isSending} className="space-y-4 border-0 p-0 m-0">
                                 <div>
                                     <label className="block text-[11px] font-bold text-gray-500 mb-1">Resolución</label>
                                     <select
@@ -745,12 +871,13 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                                         </div>
                                     )}
                                 </div>
+                                </fieldset>
                             </div>
                         )}
 
                         <button
                             type="submit"
-                            disabled={isSending || !selectedNode}
+                            disabled={isSending || !selectedNode || (commandType === 'CONFIG_CAMERA' && !isSynced)}
                             className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition shadow-md shadow-indigo-600/10 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {isSending ? (
