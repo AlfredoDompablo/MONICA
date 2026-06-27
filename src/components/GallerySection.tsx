@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Camera, RefreshCcw, Calendar, Filter, ChevronRight } from 'lucide-react';
+import { Camera, RefreshCcw, Calendar, Filter, ChevronRight, ChevronDown } from 'lucide-react';
 import DetectionModal from '@/components/admin/gallery/DetectionModal';
 import { motion } from 'framer-motion';
 
@@ -87,46 +87,54 @@ export default function GallerySection() {
                         </p>
                     </motion.div>
 
-                    <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-2xl shadow-sm border border-gray-100">
+                    <div className="flex flex-row items-center gap-3">
                         {/* Filtro de Nodos */}
-                        <div className="relative">
-                            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <div 
+                            style={{ paddingLeft: '16px', paddingRight: '14px', paddingTop: '10px', paddingBottom: '10px' }}
+                            className="bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center shrink-0"
+                        >
+                            <Filter 
+                                style={{ marginRight: '12px' }}
+                                className="w-4 h-4 text-[#1e3570] shrink-0" 
+                            />
                             <select 
                                 value={filterNode}
                                 onChange={(e) => setFilterNode(e.target.value)}
-                                className="pl-10 pr-8 py-2 bg-transparent text-sm font-bold text-gray-700 outline-none appearance-none cursor-pointer"
+                                className="bg-transparent text-sm font-bold text-gray-700 outline-none cursor-pointer appearance-none"
                             >
                                 <option value="">Todos los Nodos</option>
                                 {nodes.map((node) => (
                                     <option key={node.node_id} value={node.node_id}>
-                                        {node.node_id} ({node.description || 'Sin descripción'})
+                                        {node.node_id}
                                     </option>
                                 ))}
                             </select>
+                            <ChevronDown 
+                                style={{ marginLeft: '12px' }}
+                                className="w-4 h-4 text-gray-400 shrink-0" 
+                            />
                         </div>
 
                         {/* Selector de Orden */}
-                        <div className="h-6 w-px bg-gray-200"></div>
-
-                        <div className="relative">
+                        <div 
+                            style={{ paddingLeft: '24px', paddingRight: '14px', paddingTop: '10px', paddingBottom: '10px' }}
+                            className="bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center shrink-0"
+                        >
                             <select 
                                 value={orderBy}
                                 onChange={(e) => setOrderBy(e.target.value)}
-                                className="px-3 py-2 bg-transparent text-sm font-bold text-gray-700 outline-none appearance-none cursor-pointer"
+                                className="bg-transparent text-sm font-bold text-gray-700 outline-none cursor-pointer appearance-none"
                             >
                                 <option value="date_desc">Más recientes primero</option>
                                 <option value="date_asc">Más antiguos primero</option>
                                 <option value="coverage_desc">Mayor contaminación primero</option>
                                 <option value="coverage_asc">Menor contaminación primero</option>
                             </select>
+                            <ChevronDown 
+                                style={{ marginLeft: '12px' }}
+                                className="w-4 h-4 text-gray-400 shrink-0" 
+                            />
                         </div>
-
-                        <button 
-                            onClick={() => fetchDetections()}
-                            className="p-2 text-gray-400 hover:text-[#1e3570] transition-colors"
-                        >
-                            <RefreshCcw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-                        </button>
                     </div>
                 </div>
 
