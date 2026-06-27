@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
         const searchParams = request.nextUrl.searchParams;
         const node_id = searchParams.get('node_id');
         const limit = parseInt(searchParams.get('limit') || '20');
+        const orderByParam = searchParams.get('orderBy') || 'date_desc';
 
         const where: any = {};
         if (node_id) {
@@ -32,10 +33,19 @@ export async function GET(request: NextRequest) {
             };
         }
 
+        let orderBy: any = { timestamp: 'desc' };
+        if (orderByParam === 'date_asc') {
+            orderBy = { timestamp: 'asc' };
+        } else if (orderByParam === 'coverage_desc') {
+            orderBy = { coverage_percent: 'desc' };
+        } else if (orderByParam === 'coverage_asc') {
+            orderBy = { coverage_percent: 'asc' };
+        }
+
         // No incluimos datos binarios por defecto para no sobrecargar la respuesta
         const detections = await prisma.wasteDetection.findMany({
             where,
-            orderBy: { timestamp: 'desc' },
+            orderBy,
             take: limit,
             select: {
                 detection_id: true,
@@ -44,8 +54,13 @@ export async function GET(request: NextRequest) {
                 coverage_percent: true,
                 model_version: true,
                 confidence: true,
-                // image_original: false, 
-                // image_masked: false
+                node: {
+                    select: {
+                        description: true,
+                        latitude: true,
+                        longitude: true
+                    }
+                }
             }
         });
 

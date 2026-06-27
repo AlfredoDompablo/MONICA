@@ -1,8 +1,9 @@
-"use client";
-
 import React from 'react';
 import { X, Calendar, MapPin, Cpu, Target, Download } from 'lucide-react';
 import ImageSlider from './ImageSlider';
+import dynamic from 'next/dynamic';
+
+const DetectionMap = dynamic(() => import('./DetectionMap'), { ssr: false });
 
 interface DetectionModalProps {
     detection: any;
@@ -53,7 +54,7 @@ export default function DetectionModal({ detection, onClose }: DetectionModalPro
                         </button>
                     </div>
 
-                    <div className="space-y-6 flex-1 overflow-y-auto pr-2">
+                    <div className="space-y-5 flex-1 overflow-y-auto pr-2">
                         {/* Coverage Score */}
                         <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
                             <div className="flex items-center justify-between mb-2">
@@ -76,7 +77,9 @@ export default function DetectionModal({ detection, onClose }: DetectionModalPro
                                 </div>
                                 <div>
                                     <p className="text-[10px] text-gray-500 uppercase font-bold">Ubicación (Nodo)</p>
-                                    <p className="text-sm font-semibold text-gray-900">{detection.node_id}</p>
+                                    <p className="text-sm font-semibold text-gray-900">
+                                        {detection.node_id} {detection.node?.description ? `(${detection.node.description})` : ''}
+                                    </p>
                                 </div>
                             </div>
 
@@ -112,6 +115,19 @@ export default function DetectionModal({ detection, onClose }: DetectionModalPro
                                 </div>
                             </div>
                         </div>
+
+                        {/* Mapa de Ubicación */}
+                        {detection.node?.latitude && detection.node?.longitude && (
+                            <div className="pt-2">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold mb-2">Ubicación Geográfica</p>
+                                <DetectionMap 
+                                    latitude={parseFloat(detection.node.latitude)}
+                                    longitude={parseFloat(detection.node.longitude)}
+                                    description={detection.node.description || ''}
+                                    nodeId={detection.node_id}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {/* Actions */}
