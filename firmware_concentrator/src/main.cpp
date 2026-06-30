@@ -118,6 +118,7 @@ uint16_t totalChunks = 0;                ///< Número total de fragmentos de la 
 uint8_t missingAttempts = 0;             ///< Contador de intentos de solicitud de fragmentos perdidos
 uint32_t imgSize = 0;                    ///< Tamaño neto en bytes de la imagen capturada
 int activeImageCommandId = 0;            ///< ID del comando web que solicitó la foto activa
+unsigned long activeImageCommandTime = 0; ///< Momento (ms) en que se inició la solicitud de imagen activa
 volatile bool isGpsNotFixed = false;     ///< Indica si el nodo sensor respondió que no tiene fix de GPS
 volatile bool lastResponseWasNack = false; ///< Indica si la última respuesta recibida fue un NACK
 String lastNackMsg = "";                  ///< Contenido del último mensaje NACK recibido
@@ -603,6 +604,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
     // --- INICIO DE TRANSMISIÓN DE FOTO ---
     if (packet->header.type == DATA_IMG_START) {
         lastChunkReceivedTime = millis();
+        activeImageCommandTime = 0; // Desactivar timeout de inicio
         
         if (payloadLen >= 6) {
             memcpy(&imgSize, packet->payload, 4);
@@ -766,8 +768,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         Serial.println("LoRa Integrity: ¡100% de fragmentos recibidos con éxito! Enviando ACK final...");
         
         if (activeImageCommandId > 0) {
-            updateCommandStatus(activeImageCommandId, "COMPLETED", "Imagen recibida al 100% con éxito.");
-            activeImageCommandId = 0;
+            updateCommandStatus(activeImageCommandId, "PROCESSING", "Imagen reensamblada. Subiendo al servidor...");
         }
         
         setScreenStatus("FOTO COMPLETADA", "Reensamblado OK", "100% en SD");
@@ -849,9 +850,20 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 
                 if (httpResponseCode == 200 || httpResponseCode == 201) {
                     setScreenStatus("ESCUCHANDO", "Foto subida a la API IA", "Subida Exitosa");
+                    if (activeImageCommandId > 0) {
+                        updateCommandStatus(activeImageCommandId, "COMPLETED", "Imagen subida al servidor con éxito.");
+                        activeImageCommandId = 0;
+                    }
                     break;
                 } else {
                     setScreenStatus("SUBIENDO FOTO", "ERR " + String(httpResponseCode), "Reintentando...");
+                }
+                
+                if (attempt == attempts) {
+                    if (activeImageCommandId > 0) {
+                        updateCommandStatus(activeImageCommandId, "FAILED", "Error al subir la imagen al servidor. Código HTTP: " + String(httpResponseCode));
+                        activeImageCommandId = 0;
+                    }
                 }
                 
                 if (attempt < attempts) {
@@ -859,6 +871,10 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 }
             } else {
                 Serial.println("Error: No se pudo abrir el archivo guardado para enviar a la API");
+                if (activeImageCommandId > 0) {
+                    updateCommandStatus(activeImageCommandId, "FAILED", "Error al abrir el archivo de imagen en la tarjeta SD.");
+                    activeImageCommandId = 0;
+                }
                 break;
             }
         }
@@ -967,6 +983,28 @@ void handleLoRa() {
                             lastResponseWasNack = true;
                             lastNackMsg = payloadMsg;
                             responseReceived = true; // Liberar polling de red
+                            
+                            if (expectedSeqNum > 0 || activeImageCommandId > 0) {
+                                Serial.printf("LoRa RX: Abortando descarga por NACK de error: %s\n", payloadMsg.c_str());
+                                if (sdQueue != NULL) {
+                                    ImageChunkMessage msg;
+                                    msg.srcId = targetNode;
+                                    msg.type = DATA_IMG_END;
+                                    msg.payloadLen = 0;
+                                    xQueueSend(sdQueue, &msg, 0);
+                                }
+                                expectedSeqNum = 0;
+                                if (chunkReceived != NULL) {
+                                    free(chunkReceived);
+                                    chunkReceived = NULL;
+                                }
+                                if (activeImageCommandId > 0) {
+                                    updateCommandStatus(activeImageCommandId, "FAILED", "El nodo reportó un error: " + payloadMsg);
+                                    sendNetworkLog("ERROR", "El nodo reportó un error: " + payloadMsg, "NODE_C");
+                                    activeImageCommandId = 0;
+                                }
+                                setScreenStatus("TIMEOUT IMAGEN", "NACK: Abortado", "Limpiando...");
+                            }
                         }
                     }
                 }
@@ -1147,8 +1185,10 @@ void checkPendingCommands() {
             targetNode = nodeNum;
             pollForImage = true;
             
-            // Registrar el ID del comando activo para actualizarlo cuando finalice la transferencia del archivo
+            lastResponseWasNack = false;
+            lastNackMsg = "";
             activeImageCommandId = commandId;
+            activeImageCommandTime = millis();
             
             pollNode(nodeNum, CMD_REQ_IMAGE);
             
@@ -1162,7 +1202,13 @@ void checkPendingCommands() {
                     break;
                 }
             }
-            if (!success) {
+            if (lastResponseWasNack) {
+                responseMsg = "El nodo reportó un error: " + lastNackMsg;
+                updateCommandStatus(commandId, "FAILED", responseMsg);
+                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+                activeImageCommandId = 0;
+            }
+            else if (!success) {
                 responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
                 updateCommandStatus(commandId, "FAILED", responseMsg);
                 sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
@@ -1467,9 +1513,18 @@ void loop() {
   }
 
   
+  // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ANTES DE INICIAR LA TRANSMISIÓN ---
+  if (activeImageCommandId > 0 && expectedSeqNum == 0 && (millis() - activeImageCommandTime > 60000)) {
+      Serial.println("[TIMEOUT] Abortando solicitud de imagen: no se inició la transmisión (no DATA_IMG_START) en 60s.");
+      updateCommandStatus(activeImageCommandId, "FAILED", "Timeout: El nodo no inició la transmisión de fragmentos en 60s.");
+      sendNetworkLog("ERROR", "Timeout: El nodo no inició la transmisión de fragmentos en 60s.", "NODE_C");
+      activeImageCommandId = 0;
+      setScreenStatus("TIMEOUT IMAGEN", "Sin inicio 60s", "Limpiando...");
+  }
+
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
-  if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
-      Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 60s.");
+  if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 20000)) {
+      Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 20s.");
       if (sdQueue != NULL) {
           ImageChunkMessage msg;
           msg.srcId = targetNode;
@@ -1485,12 +1540,12 @@ void loop() {
       lastPollTime = millis(); 
       
       if (activeImageCommandId > 0) {
-          updateCommandStatus(activeImageCommandId, "FAILED", "Timeout de inactividad de 60s esperando fragmentos de imagen.");
-          sendNetworkLog("ERROR", "Timeout de inactividad de 60s esperando fragmentos de imagen.", "NODE_C");
+          updateCommandStatus(activeImageCommandId, "FAILED", "Timeout de inactividad de 20s esperando fragmentos de imagen.");
+          sendNetworkLog("ERROR", "Timeout de inactividad de 20s esperando fragmentos de imagen.", "NODE_C");
           activeImageCommandId = 0;
       }
       
-      setScreenStatus("TIMEOUT IMAGEN", "Inactividad 60s", "Limpiando...");
+      setScreenStatus("TIMEOUT IMAGEN", "Inactividad 20s", "Limpiando...");
   }
   
   // --- CONTROL DE MÁQUINA DE ESTADOS DE POLLING ---
@@ -1644,7 +1699,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       targetNode = nodeNum;
       pollForImage = true;
       
+      lastResponseWasNack = false;
+      lastNackMsg = "";
       activeImageCommandId = commandId;
+      activeImageCommandTime = millis();
       
       pollNode(nodeNum, CMD_REQ_IMAGE);
       
@@ -1658,7 +1716,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
               break;
           }
       }
-      if (!success) {
+      if (lastResponseWasNack) {
+          responseMsg = "El nodo reportó un error: " + lastNackMsg;
+          updateCommandStatus(commandId, "FAILED", responseMsg);
+          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
+          activeImageCommandId = 0;
+      }
+      else if (!success) {
           responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
           updateCommandStatus(commandId, "FAILED", responseMsg);
           sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);

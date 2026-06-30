@@ -604,6 +604,26 @@ void requestAndSendImage(uint8_t destId) {
     Serial.printf("[CAMERA DEBUG] ERROR: Peticion de imagen fallida o tamano "
                   "excede el limite. imgIncoming=%d, imgSize=%u\n",
                   imgIncoming, imgSize);
+                  
+    // Enviar NACK de error de cámara al concentrador
+    LoRaPacket nackPacket;
+    memset(&nackPacket, 0, sizeof(LoRaHeader));
+    nackPacket.header.syncWord[0] = LORA_SYNC_0;
+    nackPacket.header.syncWord[1] = LORA_SYNC_1;
+    nackPacket.header.srcId = MY_NODE_ID;
+    nackPacket.header.destId = destId;
+    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.type = NACK;
+    nackPacket.header.seqNum = packetSequence++;
+    nackPacket.header.ttl = 5;
+    
+    if (!imgIncoming) {
+      strcpy((char *)nackPacket.payload, "CAM_INIT_ERR");
+    } else {
+      strcpy((char *)nackPacket.payload, "CAM_SIZE_ERR");
+    }
+    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    
     setScreenStatus("ERROR CAMARA", "Tamanio invalido", "Apagando camara");
     digitalWrite(CAM_EN, LOW); // Apagar cámara ante error
     radio.startReceive();
@@ -621,6 +641,22 @@ void requestAndSendImage(uint8_t destId) {
   if (!imgFile) {
     Serial.println(
         "[CAMERA DEBUG] ERROR: No se pudo abrir /temp_img.jpg en LittleFS!");
+        
+    // Enviar NACK de error de almacenamiento al concentrador
+    LoRaPacket nackPacket;
+    memset(&nackPacket, 0, sizeof(LoRaHeader));
+    nackPacket.header.syncWord[0] = LORA_SYNC_0;
+    nackPacket.header.syncWord[1] = LORA_SYNC_1;
+    nackPacket.header.srcId = MY_NODE_ID;
+    nackPacket.header.destId = destId;
+    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.type = NACK;
+    nackPacket.header.seqNum = packetSequence++;
+    nackPacket.header.ttl = 5;
+    
+    strcpy((char *)nackPacket.payload, "FS_WRITE_ERR");
+    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    
     setScreenStatus("ERROR FLASH", "Err Inicializar", "Apagando camara");
     digitalWrite(CAM_EN, LOW);
     radio.startReceive();
@@ -662,6 +698,22 @@ void requestAndSendImage(uint8_t destId) {
   if (!downloadSuccess) {
     Serial.println("[CAMERA DEBUG] ERROR: Descarga incompleta, eliminando "
                    "archivo temporal.");
+                   
+    // Enviar NACK al concentrador
+    LoRaPacket nackPacket;
+    memset(&nackPacket, 0, sizeof(LoRaHeader));
+    nackPacket.header.syncWord[0] = LORA_SYNC_0;
+    nackPacket.header.syncWord[1] = LORA_SYNC_1;
+    nackPacket.header.srcId = MY_NODE_ID;
+    nackPacket.header.destId = destId;
+    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.type = NACK;
+    nackPacket.header.seqNum = packetSequence++;
+    nackPacket.header.ttl = 5;
+    
+    strcpy((char *)nackPacket.payload, "CAM_READ_ERR");
+    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    
     setScreenStatus("ERROR CAMARA", "Descarga fallida", "Archivo borrado");
     LittleFS.remove("/temp_img.jpg");
     digitalWrite(CAM_EN, LOW);
