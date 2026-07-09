@@ -112,6 +112,7 @@ volatile bool isSDWritingActive = false;
 void sdWriteTask(void* parameter);
 
 uint16_t expectedSeqNum = 0;             ///< Fragmento de secuencia esperado. 0 significa sesión inactiva.
+uint8_t activeImageSrcId = 0;            ///< ID del nodo emisor de la imagen activa
 unsigned long lastChunkReceivedTime = 0;  ///< Último milisegundo en que se recibió un fragmento (Timeout check)
 bool* chunkReceived = NULL;              ///< Bitmap dinámico en RAM para control de retransmisión selectiva (ARQ)
 uint16_t totalChunks = 0;                ///< Número total de fragmentos de la imagen activa
@@ -119,6 +120,7 @@ uint8_t missingAttempts = 0;             ///< Contador de intentos de solicitud 
 uint32_t imgSize = 0;                    ///< Tamaño neto en bytes de la imagen capturada
 int activeImageCommandId = 0;            ///< ID del comando web que solicitó la foto activa
 unsigned long activeImageCommandTime = 0; ///< Momento (ms) en que se inició la solicitud de imagen activa
+unsigned long startTimeoutThreshold = 60000; ///< Límite de tiempo antes de recibir DATA_IMG_START o ACK_PROCESSING
 volatile bool isGpsNotFixed = false;     ///< Indica si el nodo sensor respondió que no tiene fix de GPS
 volatile bool lastResponseWasNack = false; ///< Indica si la última respuesta recibida fue un NACK
 String lastNackMsg = "";                  ///< Contenido del último mensaje NACK recibido
@@ -601,21 +603,37 @@ void forwardSensorData(uint8_t srcId, SensorPayload* sp) {
 void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
     if (sdQueue == NULL) return;
 
+    // Si ya hay una sesión activa, verificar que los fragmentos provengan del mismo nodo
+    if (expectedSeqNum > 0 && activeImageSrcId != 0 && packet->header.srcId != activeImageSrcId) {
+        Serial.printf("LoRa RX: Ignorando paquete de imagen (tipo 0x%02X) del nodo %d. Sesión activa con nodo %d.\n", packet->header.type, packet->header.srcId, activeImageSrcId);
+        return;
+    }
+
     // --- INICIO DE TRANSMISIÓN DE FOTO ---
     if (packet->header.type == DATA_IMG_START) {
         lastChunkReceivedTime = millis();
         activeImageCommandTime = 0; // Desactivar timeout de inicio
         
         if (payloadLen >= 6) {
-            memcpy(&imgSize, packet->payload, 4);
-            memcpy(&totalChunks, packet->payload + 4, 2);
-            Serial.printf("LoRa RX: DATA_IMG_START recibido. Tamaño: %u bytes, Total Chunks: %u\n", imgSize, totalChunks);
+            uint32_t tempImgSize = 0;
+            uint16_t tempTotalChunks = 0;
+            memcpy(&tempImgSize, packet->payload, 4);
+            memcpy(&tempTotalChunks, packet->payload + 4, 2);
+            if (tempTotalChunks > 0 && tempTotalChunks < 2048) {
+                imgSize = tempImgSize;
+                totalChunks = tempTotalChunks;
+                Serial.printf("LoRa RX: DATA_IMG_START recibido. Tamaño: %u bytes, Total Chunks: %u\n", imgSize, totalChunks);
+            } else {
+                Serial.printf("LoRa RX: DATA_IMG_START con totalChunks inválido: %u. Ignorando.\n", tempTotalChunks);
+                return;
+            }
         } else {
             imgSize = 0;
             totalChunks = 0;
             Serial.println("LoRa RX: DATA_IMG_START recibido (sin payload de tamaño)");
         }
 
+        activeImageSrcId = packet->header.srcId;
         // Alojar bitmap dinámico de control de fragmentos recibidos (máx 2048 chunks)
         if (chunkReceived != NULL) {
             free(chunkReceived);
@@ -643,6 +661,26 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         uint16_t seq = packet->header.seqNum;
         lastChunkReceivedTime = millis();
         
+        // Inicialización dinámica si se perdió DATA_IMG_START
+        if (chunkReceived == NULL && (activeImageCommandId > 0 || pollForImage)) {
+            Serial.printf("LoRa RX: DATA_IMG_CHUNK seq %d recibido pero chunkReceived es NULL (posible DATA_IMG_START perdido). Inicializando sesión dinámicamente...\n", seq);
+            chunkReceived = (bool*)calloc(2048, sizeof(bool));
+            expectedSeqNum = 1;
+            missingAttempts = 0;
+            activeImageSrcId = packet->header.srcId;
+            activeImageCommandTime = 0; // Desactivar timeout de inicio
+            
+            // Encolar DATA_IMG_START ficticio para la tarea de la SD
+            ImageChunkMessage startMsg;
+            startMsg.srcId = packet->header.srcId;
+            startMsg.type = DATA_IMG_START;
+            startMsg.seqNum = 0;
+            startMsg.payloadLen = 0;
+            xQueueSend(sdQueue, &startMsg, 0);
+            
+            setScreenStatus("RECIBIENDO FOTO", "De Nodo " + String(packet->header.srcId), "Preparando SD (recup)...");
+        }
+
         // Ignorar duplicados
         if (chunkReceived != NULL && seq < 2048 && chunkReceived[seq]) {
             Serial.printf("LoRa RX: Descartando chunk duplicado seq %d (ya recibido)\n", seq);
@@ -677,6 +715,26 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         lastChunkReceivedTime = millis();
         Serial.println("LoRa RX: DATA_IMG_END recibido. Verificando integridad de chunks...");
 
+        // Inicialización dinámica si se perdió DATA_IMG_START y no hubo chunks
+        if (chunkReceived == NULL && (activeImageCommandId > 0 || pollForImage)) {
+            Serial.println("LoRa RX: DATA_IMG_END recibido pero chunkReceived es NULL. Inicializando sesión dinámicamente...");
+            chunkReceived = (bool*)calloc(2048, sizeof(bool));
+            expectedSeqNum = 1;
+            missingAttempts = 0;
+            activeImageSrcId = packet->header.srcId;
+            activeImageCommandTime = 0; // Desactivar timeout de inicio
+
+            // Encolar DATA_IMG_START ficticio para la tarea de la SD
+            ImageChunkMessage startMsg;
+            startMsg.srcId = packet->header.srcId;
+            startMsg.type = DATA_IMG_START;
+            startMsg.seqNum = 0;
+            startMsg.payloadLen = 0;
+            xQueueSend(sdQueue, &startMsg, 0);
+
+            setScreenStatus("RECIBIENDO FOTO", "De Nodo " + String(packet->header.srcId), "Preparando SD (recup END)...");
+        }
+
         // Sesión fantasma (ACK duplicado en el aire)
         if (expectedSeqNum == 0) {
             Serial.println("LoRa RX: DATA_IMG_END recibido fuera de sesión activa. Re-enviando ACK final...");
@@ -707,6 +765,9 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 imgSize = actualImgSize;
                 totalChunks = actualTotalChunks;
                 Serial.printf("LoRa RX: Info extraída de DATA_IMG_END. Tamaño: %u bytes, Total Chunks: %u\n", imgSize, totalChunks);
+            } else {
+                Serial.printf("LoRa RX: DATA_IMG_END con totalChunks inválido: %u. Ignorando.\n", actualTotalChunks);
+                return;
             }
         }
 
@@ -807,6 +868,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         radio.startReceive();
 
         expectedSeqNum = 0; 
+        activeImageSrcId = 0; // RESET activeImageSrcId
         
         if (chunkReceived != NULL) {
             free(chunkReceived);
@@ -852,6 +914,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                     setScreenStatus("ESCUCHANDO", "Foto subida a la API IA", "Subida Exitosa");
                     if (activeImageCommandId > 0) {
                         updateCommandStatus(activeImageCommandId, "COMPLETED", "Imagen subida al servidor con éxito.");
+                        sendNetworkLog("SUCCESS", "Imagen subida al servidor con éxito.", String(imgNodeFormatted));
                         activeImageCommandId = 0;
                     }
                     break;
@@ -862,6 +925,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 if (attempt == attempts) {
                     if (activeImageCommandId > 0) {
                         updateCommandStatus(activeImageCommandId, "FAILED", "Error al subir la imagen al servidor. Código HTTP: " + String(httpResponseCode));
+                        sendNetworkLog("ERROR", "Error al subir la imagen al servidor. Código HTTP: " + String(httpResponseCode), String(imgNodeFormatted));
                         activeImageCommandId = 0;
                     }
                 }
@@ -898,6 +962,11 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     packet.header.ttl = 5;
 
     setScreenStatus("SONDEANDO RED", "Nodo " + String(nodeToPoll), cmd == CMD_REQ_TELEMETRY ? "Pedir Telemetria" : "Pedir Imagen");
+    
+    // Asegurar que la radio esté en standby y limpia antes de transmitir
+    radio.standby();
+    delay(50); // Pequeño margen para estabilidad eléctrica y RF frente a actividad WiFi en background
+    
     int txState = radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
     Serial.printf("Polling Node %d with CMD 0x%02X, TX State: %d\n", nodeToPoll, cmd, txState);
     radio.startReceive();
@@ -954,6 +1023,20 @@ void handleLoRa() {
                             responseReceived = true; 
                         }
                     }
+                    // ACK de procesamiento de foto
+                    else if (packet.header.type == ACK_PROCESSING) {
+                        setScreenStatus("CAPTURA INIC", "Nodo " + String(packet.header.srcId), "Descargando serial...");
+                        Serial.printf("LoRa RX: ACK_PROCESSING recibido de Nodo %d. Extendiendo timeout de inicio a 5 minutos.\n", packet.header.srcId);
+                        
+                        if (packet.header.srcId == targetNode) {
+                            responseReceived = true;
+                            if (activeImageCommandId > 0) {
+                                startTimeoutThreshold = 300000; // 5 minutos (300,000 ms)
+                                updateCommandStatus(activeImageCommandId, "PROCESSING", "ACK recibido. Nodo sensor iniciando captura y procesamiento local de imagen...");
+                                sendNetworkLog("INFO", "Confirmación de procesamiento recibida. Descargando imagen en el nodo...", String(packet.header.srcId));
+                            }
+                        }
+                    }
                     // Configuración de cámara devuelta por el nodo
                     else if (packet.header.type == DATA_CAM_CONFIG) {
                         setScreenStatus("CFG RECIBIDA", "Nodo " + String(packet.header.srcId), "Datos de camara OK");
@@ -994,6 +1077,7 @@ void handleLoRa() {
                                     xQueueSend(sdQueue, &msg, 0);
                                 }
                                 expectedSeqNum = 0;
+                                activeImageSrcId = 0;
                                 if (chunkReceived != NULL) {
                                     free(chunkReceived);
                                     chunkReceived = NULL;
@@ -1180,8 +1264,8 @@ void checkPendingCommands() {
             responseReceived = false;
             currentAttempt = 1;
             requestSentTime = millis();
-            currentTimeout = 6000;
-            pollState = POLL_STATE_WAITING_RESPONSE;
+            currentTimeout = 15000; // 15 segundos por intento de handshake para dar tiempo al nodo a procesar
+            pollState = POLL_STATE_WAITING_RESPONSE; // Habilitar reintentos en el bucle principal
             targetNode = nodeNum;
             pollForImage = true;
             
@@ -1189,35 +1273,14 @@ void checkPendingCommands() {
             lastNackMsg = "";
             activeImageCommandId = commandId;
             activeImageCommandTime = millis();
+            startTimeoutThreshold = 180000; // 180 segundos (3 minutos) total para los 3 intentos de handshake y arranque de CMOS
+            expectedSeqNum = 0;
+            activeImageSrcId = 0;
             
             pollNode(nodeNum, CMD_REQ_IMAGE);
             
-            unsigned long waitStart = millis();
-            while (millis() - waitStart < 7000) {
-                smartDelay(10);
-                handleLoRa();
-                if (expectedSeqNum > 0 || responseReceived) {
-                    success = true;
-                    responseMsg = "Disparo exitoso. Descargando imagen...";
-                    break;
-                }
-            }
-            if (lastResponseWasNack) {
-                responseMsg = "El nodo reportó un error: " + lastNackMsg;
-                updateCommandStatus(commandId, "FAILED", responseMsg);
-                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
-                activeImageCommandId = 0;
-            }
-            else if (!success) {
-                responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
-                updateCommandStatus(commandId, "FAILED", responseMsg);
-                sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
-                activeImageCommandId = 0; // Cancelar comando activo
-            } else {
-                // Si inició correctamente, se mantiene en PROCESSING y se actualiza al final de la descarga (DATA_IMG_END)
-                updateCommandStatus(commandId, "PROCESSING", "Iniciando recepción de fragmentos de imagen...");
-                sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
-            }
+            updateCommandStatus(commandId, "PROCESSING", "Esperando confirmación de captura del nodo...");
+            sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
         }
         else if (type == "CONFIG_CAMERA") {
             String paramStr = cmdObj["parameters"].as<String>();
@@ -1514,17 +1577,17 @@ void loop() {
 
   
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ANTES DE INICIAR LA TRANSMISIÓN ---
-  if (activeImageCommandId > 0 && expectedSeqNum == 0 && (millis() - activeImageCommandTime > 60000)) {
-      Serial.println("[TIMEOUT] Abortando solicitud de imagen: no se inició la transmisión (no DATA_IMG_START) en 60s.");
-      updateCommandStatus(activeImageCommandId, "FAILED", "Timeout: El nodo no inició la transmisión de fragmentos en 60s.");
-      sendNetworkLog("ERROR", "Timeout: El nodo no inició la transmisión de fragmentos en 60s.", "NODE_C");
+  if (activeImageCommandId > 0 && expectedSeqNum == 0 && (millis() - activeImageCommandTime > startTimeoutThreshold)) {
+      Serial.printf("[TIMEOUT] Abortando solicitud de imagen: no se inició la transmisión (no DATA_IMG_START) en %u segundos.\n", startTimeoutThreshold / 1000);
+      updateCommandStatus(activeImageCommandId, "FAILED", "Timeout: El nodo no inició la transmisión en el tiempo esperado.");
+      sendNetworkLog("ERROR", "Timeout: El nodo no inició la transmisión en el tiempo esperado.", "NODE_C");
       activeImageCommandId = 0;
-      setScreenStatus("TIMEOUT IMAGEN", "Sin inicio 60s", "Limpiando...");
+      setScreenStatus("TIMEOUT IMAGEN", "Timeout inicio", "Limpiando...");
   }
 
   // --- CONTROL DE SEGURIDAD CONTRA SESIÓN COLGADA ---
-  if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 20000)) {
-      Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 20s.");
+  if (expectedSeqNum > 0 && (millis() - lastChunkReceivedTime > 60000)) {
+      Serial.println("[TIMEOUT] Abortando descarga de imagen por inactividad de 60s.");
       if (sdQueue != NULL) {
           ImageChunkMessage msg;
           msg.srcId = targetNode;
@@ -1533,6 +1596,7 @@ void loop() {
           xQueueSend(sdQueue, &msg, 0);
       }
       expectedSeqNum = 0;
+      activeImageSrcId = 0;
       if (chunkReceived != NULL) {
           free(chunkReceived);
           chunkReceived = NULL;
@@ -1540,12 +1604,12 @@ void loop() {
       lastPollTime = millis(); 
       
       if (activeImageCommandId > 0) {
-          updateCommandStatus(activeImageCommandId, "FAILED", "Timeout de inactividad de 20s esperando fragmentos de imagen.");
-          sendNetworkLog("ERROR", "Timeout de inactividad de 20s esperando fragmentos de imagen.", "NODE_C");
+          updateCommandStatus(activeImageCommandId, "FAILED", "Timeout de inactividad de 60s esperando fragmentos de imagen.");
+          sendNetworkLog("ERROR", "Timeout de inactividad de 60s esperando fragmentos de imagen.", "NODE_C");
           activeImageCommandId = 0;
       }
       
-      setScreenStatus("TIMEOUT IMAGEN", "Inactividad 20s", "Limpiando...");
+      setScreenStatus("TIMEOUT IMAGEN", "Inactividad 60s", "Limpiando...");
   }
   
   // --- CONTROL DE MÁQUINA DE ESTADOS DE POLLING ---
@@ -1557,12 +1621,14 @@ void loop() {
           if (responseReceived) {
               Serial.printf("LoRa Flow: Respuesta exitosa recibida del Nodo %d en intento %d.\n", targetNode, currentAttempt);
               
-              if (pollForImage) {
-                  targetNode++;
-                  if (targetNode > 4) targetNode = 1; 
-                  pollForImage = false;
-              } else {
-                  pollForImage = true;
+              if (activeImageCommandId == 0) {
+                  if (pollForImage) {
+                      targetNode++;
+                      if (targetNode > 4) targetNode = 1; 
+                      pollForImage = false;
+                  } else {
+                      pollForImage = true;
+                  }
               }
               
               pollState = POLL_STATE_IDLE;
@@ -1586,12 +1652,14 @@ void loop() {
                   
                   setScreenStatus("ERROR SONDEO", "Fallo Nodo " + String(targetNode), "Agoto 3 intentos");
                   
-                  if (pollForImage) {
-                      targetNode++;
-                      if (targetNode > 4) targetNode = 1;
-                      pollForImage = false;
-                  } else {
-                      pollForImage = true;
+                  if (activeImageCommandId == 0) {
+                      if (pollForImage) {
+                          targetNode++;
+                          if (targetNode > 4) targetNode = 1;
+                          pollForImage = false;
+                      } else {
+                          pollForImage = true;
+                      }
                   }
                   
                   pollState = POLL_STATE_IDLE;
@@ -1638,9 +1706,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 
   Serial.printf("[MQTT COMMAND] ID %d, Tipo %s, Destino %s\n", commandId, type.c_str(), targetNodeId.c_str());
-  sendNetworkLog("INFO", "Recibido comando MQTT " + type + " para " + targetNodeId + ". Ejecutando...", "NODE_C");
-  
-  updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa vía MQTT...");
+  if (type != "POLL_IMAGE") {
+      sendNetworkLog("INFO", "Recibido comando MQTT " + type + " para " + targetNodeId + ". Ejecutando...", "NODE_C");
+      updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa vía MQTT...");
+  }
 
   int nodeNum = 1;
   if (targetNodeId.startsWith("NODE_00")) {
@@ -1694,8 +1763,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       responseReceived = false;
       currentAttempt = 1;
       requestSentTime = millis();
-      currentTimeout = 6000;
-      pollState = POLL_STATE_WAITING_RESPONSE;
+      currentTimeout = 15000; // 15 segundos por intento de handshake para dar tiempo al nodo a procesar
+      pollState = POLL_STATE_WAITING_RESPONSE; // Habilitar reintentos en el bucle principal
       targetNode = nodeNum;
       pollForImage = true;
       
@@ -1703,34 +1772,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       lastNackMsg = "";
       activeImageCommandId = commandId;
       activeImageCommandTime = millis();
+      startTimeoutThreshold = 180000; // 180 segundos (3 minutos) total para los 3 intentos de handshake y arranque de CMOS
+      expectedSeqNum = 0;
+      activeImageSrcId = 0;
       
       pollNode(nodeNum, CMD_REQ_IMAGE);
       
-      unsigned long waitStart = millis();
-      while (millis() - waitStart < 7000) {
-          smartDelay(10);
-          handleLoRa();
-          if (expectedSeqNum > 0 || responseReceived) {
-              success = true;
-              responseMsg = "Disparo exitoso. Descargando imagen...";
-              break;
-          }
-      }
-      if (lastResponseWasNack) {
-          responseMsg = "El nodo reportó un error: " + lastNackMsg;
-          updateCommandStatus(commandId, "FAILED", responseMsg);
-          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
-          activeImageCommandId = 0;
-      }
-      else if (!success) {
-          responseMsg = "Timeout: No se recibió respuesta del nodo para disparar foto.";
-          updateCommandStatus(commandId, "FAILED", responseMsg);
-          sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
-          activeImageCommandId = 0;
-      } else {
-          updateCommandStatus(commandId, "PROCESSING", "Iniciando recepción de fragmentos de imagen...");
-          sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
-      }
+      Serial.printf("LoRa Flow: Solicitud de imagen para Nodo %d iniciada. Esperando respuesta...\n", nodeNum);
   }
   else if (type == "CONFIG_CAMERA") {
       JsonObject paramDoc = doc["parameters"];
@@ -1804,6 +1852,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       
       responseReceived = false;
       targetNode = nodeNum;
+      radio.standby();
+      delay(50);
       radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
       radio.startReceive();
       
@@ -1845,6 +1895,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       lastNackMsg = "";
       gotCamConfigData = false;
       targetNode = nodeNum;
+      radio.standby();
+      delay(50);
       radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
       radio.startReceive();
       
@@ -1934,6 +1986,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       
       responseReceived = false;
       targetNode = nodeNum;
+      radio.standby();
+      delay(50);
       radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
       radio.startReceive();
       
@@ -1964,8 +2018,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       sendNetworkLog("ERROR", "Error ejecutando comando " + type + ": " + responseMsg, targetNodeId);
   }
   
-  pollState = POLL_STATE_IDLE;
-  lastPollTime = millis();
+  if (type != "POLL_IMAGE") {
+      pollState = POLL_STATE_IDLE;
+      lastPollTime = millis();
+  }
 }
 
 /**

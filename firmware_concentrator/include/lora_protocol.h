@@ -29,6 +29,7 @@ enum PacketType : uint8_t {
     // Respuestas (Nodo -> Concentrador)
     ACK               = 0x20,
     NACK              = 0x21,
+    ACK_PROCESSING    = 0x22, // Nodo -> Concentrador (Capturando y procesando imagen de cámara)
     DATA_TELEMETRY    = 0x30,
     DATA_IMG_START    = 0x31,
     DATA_IMG_CHUNK    = 0x32,
