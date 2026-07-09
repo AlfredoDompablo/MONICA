@@ -251,6 +251,16 @@ void updateTFT() {
   tft.setTextColor(gpsFixed ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
   tft.print(gpsFixed ? "FIX" : "NO");
 
+  // Dibujar el icono de satélite y cantidad de satélites al lado de GPS
+  int satX = gpsFixed ? 50 : 44;
+  tft.drawBitmap(satX, 17, satellite_icon, 8, 8,
+                 gps.satellites.isValid() && gps.satellites.value() > 0
+                     ? TFT_GREEN
+                     : TFT_YELLOW);
+  tft.setCursor(satX + 11, 18);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.printf("%d", gps.satellites.isValid() ? gps.satellites.value() : 0);
+
   // Icono de batería y texto (medición real)
   uint8_t batPercent = getBatteryPercent();
   drawBatteryIcon(115, 18, batPercent);
@@ -278,19 +288,8 @@ void updateTFT() {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.print(screenProgress);
   } else {
-    // Dibujar el icono de satélite y cantidad de satélites conectados
-    tft.drawBitmap(4, 67, satellite_icon, 8, 8,
-                   gps.satellites.isValid() && gps.satellites.value() > 0
-                       ? TFT_GREEN
-                       : TFT_YELLOW);
-    tft.setCursor(16, 67);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.printf("Sats: %d",
-               gps.satellites.isValid() ? gps.satellites.value() : 0);
-
-    tft.setCursor(80, 67);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.printf("Pacing: %d", DELAY_TX);
+    tft.printf("Pacing: %d ms", DELAY_TX);
   }
 }
 
