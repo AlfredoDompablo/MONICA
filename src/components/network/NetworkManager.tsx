@@ -13,7 +13,11 @@ import {
     Radio, 
     Trash2,
     Sliders,
-    ChevronDown
+    ChevronDown,
+    Calendar,
+    Clock,
+    Plus,
+    XCircle
 } from 'lucide-react';
 
 interface NodeInfo {
@@ -76,11 +80,33 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
     const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
     const [isSynced, setIsSynced] = useState<boolean>(false);
 
-    // Cargar Logs y Comandos desde la API
+    // --- ESTADOS Y CONTROL DE RUTINAS PROGRAMADAS ---
+    const [activeTab, setActiveTab] = useState<'realtime' | 'routines'>('realtime');
+    const [routines, setRoutines] = useState<any[]>([]);
+    const [editingRoutineId, setEditingRoutineId] = useState<number | null>(null);
+    const [newRoutineName, setNewRoutineName] = useState('');
+    const [newRoutineDesc, setNewRoutineDesc] = useState('');
+    const [selectedDays, setSelectedDays] = useState<number[]>([1, 2, 3, 4, 5]); // Lunes a Viernes por defecto
+    const [newRoutineHour, setNewRoutineHour] = useState<number>(12);
+    const [newRoutineMin, setNewRoutineMin] = useState<number>(0);
+    const [newRoutineSteps, setNewRoutineSteps] = useState<{ type: string; target_node_id: string }[]>([]);
+    const [stepNode, setStepNode] = useState<string>('');
+    const [stepType, setStepType] = useState<string>('POLL_TELEMETRY');
+    const [isSavingRoutine, setIsSavingRoutine] = useState(false);
+
+    // Seleccionar primer nodo por defecto
+    useEffect(() => {
+        if (nodes.length > 0 && !stepNode) {
+            setStepNode(nodes[0].node_id);
+        }
+    }, [nodes, stepNode]);
+
+    // Cargar Logs, Comandos y Rutinas desde la API
     const fetchData = useCallback(async () => {
         try {
             const logsRes = await fetch('/api/network/logs?limit=50');
             const commandsRes = await fetch('/api/network/commands?limit=10');
+            const routinesRes = await fetch('/api/network/routines');
 
             if (logsRes.ok && commandsRes.ok) {
                 const logsData = await logsRes.json();
@@ -88,10 +114,157 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                 setLogs(logsData);
                 setCommands(commandsData);
             }
+            if (routinesRes.ok) {
+                const routinesData = await routinesRes.json();
+                setRoutines(routinesData);
+            }
         } catch (error) {
             console.error('Error fetching network data:', error);
         }
     }, []);
+
+    // Handlers para la gestión de rutinas
+    const handleAddStepToNewRoutine = () => {
+        if (!stepNode || !stepType) return;
+        setNewRoutineSteps(prev => [...prev, { type: stepType, target_node_id: stepNode }]);
+    };
+
+    const handleRemoveStepFromNewRoutine = (index: number) => {
+        setNewRoutineSteps(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const toggleDay = (dayNum: number) => {
+        setSelectedDays(prev => 
+            prev.includes(dayNum) 
+                ? prev.filter(d => d !== dayNum) 
+                : [...prev, dayNum]
+        );
+    };
+
+    const handleEditRoutine = (routine: any) => {
+        setEditingRoutineId(routine.routine_id);
+        setNewRoutineName(routine.name);
+        setNewRoutineDesc(routine.description || '');
+        setSelectedDays(routine.days_of_week.split(',').map(Number));
+        setNewRoutineHour(routine.hour);
+        setNewRoutineMin(routine.minute);
+        setNewRoutineSteps(routine.steps.map((s: any) => ({ type: s.type, target_node_id: s.target_node_id })));
+    };
+
+    const handleCancelEdit = () => {
+        setEditingRoutineId(null);
+        setNewRoutineName('');
+        setNewRoutineDesc('');
+        setSelectedDays([1, 2, 3, 4, 5]);
+        setNewRoutineHour(12);
+        setNewRoutineMin(0);
+        setNewRoutineSteps([]);
+    };
+
+    const handleSaveRoutine = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newRoutineName.trim()) return;
+        if (newRoutineSteps.length === 0) {
+            alert('Agrega al menos un paso a la rutina antes de guardar.');
+            return;
+        }
+        if (selectedDays.length === 0) {
+            alert('Selecciona al menos un día para programar la rutina.');
+            return;
+        }
+
+        setIsSavingRoutine(true);
+        try {
+            const url = editingRoutineId 
+                ? `/api/network/routines/${editingRoutineId}`
+                : '/api/network/routines';
+            const method = editingRoutineId ? 'PUT' : 'POST';
+
+            const res = await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: newRoutineName,
+                    description: newRoutineDesc,
+                    days_of_week: selectedDays.sort((a, b) => a - b).join(','),
+                    hour: newRoutineHour,
+                    minute: newRoutineMin,
+                    steps: newRoutineSteps
+                })
+            });
+
+            if (res.ok) {
+                handleCancelEdit();
+                fetchData();
+            } else {
+                let errorMsg = 'Error desconocido';
+                try {
+                    const data = await res.json();
+                    errorMsg = data.error || errorMsg;
+                } catch (e) {
+                    errorMsg = res.statusText || errorMsg;
+                }
+                alert('Error al guardar rutina: ' + errorMsg);
+            }
+        } catch (error) {
+            console.error('Error saving routine:', error);
+        } finally {
+            setIsSavingRoutine(false);
+        }
+    };
+
+    const handleDeleteRoutine = async (routineId: number) => {
+        if (!confirm('¿Estás seguro de que deseas eliminar esta rutina programada?')) return;
+        try {
+            const res = await fetch(`/api/network/routines/${routineId}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                // Si estábamos editando la que se borró, cancelar edición
+                if (editingRoutineId === routineId) {
+                    handleCancelEdit();
+                }
+                fetchData();
+            }
+        } catch (error) {
+            console.error('Error deleting routine:', error);
+        }
+    };
+
+    const handleRunRoutineNow = async (routineId: number) => {
+        try {
+            const res = await fetch(`/api/network/routines/${routineId}`, {
+                method: 'POST'
+            });
+            if (res.ok) {
+                alert('Rutina enviada a la cola de ejecución manual. Se iniciará el PING de comprobación en los nodos.');
+                fetchData();
+            }
+        } catch (error) {
+            console.error('Error triggering routine:', error);
+        }
+    };
+
+    const handleAbortExecution = async (executionId: number) => {
+        if (!confirm('¿Estás seguro de que deseas abortar esta ejecución en curso?')) return;
+        try {
+            const res = await fetch(`/api/network/routines/executions/${executionId}/abort`, {
+                method: 'POST'
+            });
+            if (res.ok) {
+                fetchData();
+            } else {
+                let errorMsg = 'Error al abortar';
+                try {
+                    const data = await res.json();
+                    errorMsg = data.error || errorMsg;
+                } catch (e) {}
+                alert(errorMsg);
+            }
+        } catch (error) {
+            console.error('Error aborting execution:', error);
+        }
+    };
 
     // Configurar polling automático cada 3 segundos
     useEffect(() => {
@@ -352,8 +525,49 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
         }
     };
 
+    const getDayName = (day: number) => {
+        const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Todos los días'];
+        return days[day] || '';
+    };
+
+    const formatDaysOfWeek = (daysStr: string) => {
+        if (!daysStr) return '';
+        const daysMap = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const days = daysStr.split(',').map(Number);
+        if (days.length === 7) return 'Todos los días';
+        return days.map(d => daysMap[d]).join(', ');
+    };
+
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="space-y-6 w-full animate-fadeIn">
+            {/* Control de Pestañas Superior */}
+            <div className="flex border-b border-gray-200">
+                <button
+                    onClick={() => setActiveTab('realtime')}
+                    className={`py-3.5 px-6 font-bold text-sm border-b-2 transition flex items-center gap-2 ${
+                        activeTab === 'realtime'
+                            ? 'border-indigo-600 text-indigo-600'
+                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                    <Terminal className="w-4 h-4" />
+                    Consola Real-Time y Logs
+                </button>
+                <button
+                    onClick={() => setActiveTab('routines')}
+                    className={`py-3.5 px-6 font-bold text-sm border-b-2 transition flex items-center gap-2 ${
+                        activeTab === 'routines'
+                            ? 'border-indigo-600 text-indigo-600'
+                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                    <Calendar className="w-4 h-4" />
+                    Rutinas Programadas
+                </button>
+            </div>
+
+            {activeTab === 'realtime' ? (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Panel de Comandos Izquierdo */}
             <div className="lg:col-span-1 space-y-6">
                 <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
@@ -1039,6 +1253,353 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
                     </div>
                 </div>
             </div>
+        </div>
+            ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-fadeIn w-full">
+                    {/* Columna Izquierda: Lista e Historial */}
+                    <div className="lg:col-span-2 space-y-6">
+                        {/* Lista de Rutinas */}
+                        <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
+                            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                                <Clock className="w-5 h-5 text-indigo-600 animate-pulse" />
+                                Rutinas de Monitoreo Activas
+                            </h2>
+                            
+                            {routines.length === 0 ? (
+                                <div className="text-center py-10 border border-dashed border-gray-200 rounded-xl text-gray-400 italic">
+                                    No hay rutinas programadas configuradas.
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {routines.map((routine) => (
+                                        <div key={routine.routine_id} className="p-4 rounded-xl border border-gray-150 bg-gray-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                            <div>
+                                                <h3 className="font-bold text-gray-900 text-lg">{routine.name}</h3>
+                                                {routine.description && <p className="text-gray-500 text-sm mb-1">{routine.description}</p>}
+                                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-sm text-gray-600 font-medium">
+                                                    <span className="flex items-center gap-1">
+                                                        <Calendar className="w-4 h-4 text-indigo-500" />
+                                                        {formatDaysOfWeek(routine.days_of_week)}
+                                                    </span>
+                                                    <span className="flex items-center gap-1">
+                                                        <Clock className="w-4 h-4 text-indigo-500" />
+                                                        {String(routine.hour).padStart(2, '0')}:{String(routine.minute).padStart(2, '0')} hrs
+                                                    </span>
+                                                    <span className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-lg text-xs font-bold">
+                                                        {routine.steps?.length || 0} comandos
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <button
+                                                    onClick={() => handleRunRoutineNow(routine.routine_id)}
+                                                    className="px-3 py-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-xl text-sm font-bold transition flex items-center gap-1.5"
+                                                    title="Ejecutar ahora mismo"
+                                                >
+                                                    <Play className="w-4 h-4" />
+                                                    Lanzar ya
+                                                </button>
+                                                <button
+                                                    onClick={() => handleEditRoutine(routine)}
+                                                    className="p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl transition"
+                                                    title="Editar rutina"
+                                                >
+                                                    <Sliders className="w-4 h-4" />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteRoutine(routine.routine_id)}
+                                                    className="p-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-xl transition"
+                                                    title="Eliminar rutina"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Historial de Ejecuciones */}
+                        <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
+                            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                                <Activity className="w-5 h-5 text-indigo-600" />
+                                Historial de Ejecuciones Recientes
+                            </h2>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="border-b border-gray-200 text-sm font-bold text-gray-500 bg-gray-50/50">
+                                            <th className="p-4">Rutina</th>
+                                            <th className="p-4">Inicio</th>
+                                            <th className="p-4">Fin</th>
+                                            <th className="p-4">Estado / Cola de Pasos</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {routines.flatMap(r => r.executions || []).length === 0 ? (
+                                            <tr>
+                                                <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                                    No se registran ejecuciones de rutinas en la sesión.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            routines
+                                                .flatMap(r => (r.executions || []).map((exec: any) => ({ ...exec, routineName: r.name })))
+                                                .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+                                                .slice(0, 10)
+                                                .map((exec: any) => (
+                                                    <tr key={exec.execution_id} className="hover:bg-gray-50/40 text-sm text-gray-700">
+                                                        <td className="p-4 font-bold text-gray-900">{exec.routineName}</td>
+                                                        <td className="p-4 whitespace-nowrap">
+                                                            {new Date(exec.started_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                                        </td>
+                                                        <td className="p-4 whitespace-nowrap">
+                                                            {exec.finished_at 
+                                                                ? new Date(exec.finished_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) 
+                                                                : 'En curso...'}
+                                                        </td>
+                                                        <td className="p-4">
+                                                            <div className="flex flex-col gap-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    {exec.status === 'RUNNING' && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
+                                                                    {exec.status === 'COMPLETED' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                                                                    {exec.status === 'FAILED' && <AlertTriangle className="w-4 h-4 text-rose-500" />}
+                                                                    <span className={`text-xs font-bold uppercase ${
+                                                                        exec.status === 'COMPLETED' ? 'text-emerald-600' : exec.status === 'FAILED' ? 'text-rose-600' : 'text-amber-600'
+                                                                    }`}>
+                                                                        {exec.status}
+                                                                    </span>
+                                                                    {exec.status === 'RUNNING' && (
+                                                                        <button
+                                                                            onClick={() => handleAbortExecution(exec.execution_id)}
+                                                                            title="Abortar Ejecución"
+                                                                            className="ml-3 inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 transition shadow-sm"
+                                                                        >
+                                                                            <XCircle className="w-3.5 h-3.5" />
+                                                                            Abortar
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                                                    {exec.steps?.map((step: any, sIdx: number) => {
+                                                                        let stepLabel = '';
+                                                                        if (step.type === 'PRE_PING') {
+                                                                            stepLabel = `Ping ${step.node_id}`;
+                                                                            if (step.attempt > 1) stepLabel += ` (Intento ${step.attempt})`;
+                                                                        } else if (step.type === 'POLL_TELEMETRY') {
+                                                                            stepLabel = `Tlm ${step.node_id}`;
+                                                                        } else if (step.type === 'POLL_IMAGE') {
+                                                                            stepLabel = `Foto ${step.node_id}`;
+                                                                        }
+
+                                                                        return (
+                                                                            <span 
+                                                                                key={step.exec_step_id} 
+                                                                                className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                                                                    step.status === 'COMPLETED' 
+                                                                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                                                                        : step.status === 'FAILED' 
+                                                                                        ? 'bg-rose-50 text-rose-700 border-rose-200' 
+                                                                                        : step.status === 'RUNNING' 
+                                                                                        ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse' 
+                                                                                        : 'bg-gray-50 text-gray-400 border-gray-200'
+                                                                                }`}
+                                                                                title={`Paso de ejecución: ${step.type} en ${step.node_id} (Estado: ${step.status})`}
+                                                                            >
+                                                                                {stepLabel}
+                                                                            </span>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Columna Derecha: Formulario de Creación / Edición */}
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm sticky top-6">
+                            <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+                                <Plus className="w-5 h-5 text-indigo-600" />
+                                {editingRoutineId !== null ? 'Editar Rutina' : 'Nueva Rutina'}
+                            </h2>
+
+                            <form onSubmit={handleSaveRoutine} className="space-y-5">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Nombre de Rutina</label>
+                                    <input
+                                        type="text"
+                                        value={newRoutineName}
+                                        onChange={(e) => setNewRoutineName(e.target.value)}
+                                        placeholder="Ej. Monitoreo Semanal"
+                                        className="w-full rounded-xl border border-gray-300 py-3 px-4 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium placeholder-gray-400"
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Descripción</label>
+                                    <textarea
+                                        value={newRoutineDesc}
+                                        onChange={(e) => setNewRoutineDesc(e.target.value)}
+                                        placeholder="Breve propósito de la rutina"
+                                        className="w-full rounded-xl border border-gray-300 py-3 px-4 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium placeholder-gray-400"
+                                        rows={2}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Días de ejecución</label>
+                                    <div className="flex gap-2 flex-wrap">
+                                        {[
+                                            { label: 'D', value: 0, title: 'Domingo' },
+                                            { label: 'L', value: 1, title: 'Lunes' },
+                                            { label: 'M', value: 2, title: 'Martes' },
+                                            { label: 'M', value: 3, title: 'Miércoles' },
+                                            { label: 'J', value: 4, title: 'Jueves' },
+                                            { label: 'V', value: 5, title: 'Viernes' },
+                                            { label: 'S', value: 6, title: 'Sábado' }
+                                        ].map((day) => {
+                                            const isSelected = selectedDays.includes(day.value);
+                                            return (
+                                                <button
+                                                    key={day.value}
+                                                    type="button"
+                                                    onClick={() => toggleDay(day.value)}
+                                                    title={day.title}
+                                                    className={`w-10 h-10 rounded-full font-bold text-xs flex items-center justify-center border transition-all ${
+                                                        isSelected
+                                                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20'
+                                                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                                                    }`}
+                                                >
+                                                    {day.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-2">Hora</label>
+                                        <select
+                                            value={newRoutineHour}
+                                            onChange={(e) => setNewRoutineHour(Number(e.target.value))}
+                                            className="w-full rounded-xl border border-gray-300 py-3 px-4 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                        >
+                                            {Array.from({ length: 24 }).map((_, i) => (
+                                                <option key={i} value={i}>{String(i).padStart(2, '0')}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-2">Minuto</label>
+                                        <select
+                                            value={newRoutineMin}
+                                            onChange={(e) => setNewRoutineMin(Number(e.target.value))}
+                                            className="w-full rounded-xl border border-gray-300 py-3 px-4 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-gray-900 font-medium"
+                                        >
+                                            {Array.from({ length: 60 }).map((_, i) => (
+                                                <option key={i} value={i}>{String(i).padStart(2, '0')}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="border-t border-gray-200 pt-4">
+                                    <label className="block text-sm font-bold text-gray-850 mb-3">
+                                        Pasos de Rutina ({newRoutineSteps.length})
+                                    </label>
+                                    
+                                    {newRoutineSteps.length === 0 ? (
+                                        <p className="text-sm text-gray-400 italic mb-4">No hay comandos agregados. Agrega uno abajo.</p>
+                                    ) : (
+                                        <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                                            {newRoutineSteps.map((step, idx) => (
+                                                <div key={idx} className="flex items-center justify-between p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-750">
+                                                    <span>
+                                                        Paso {idx + 1}: {step.type === 'POLL_TELEMETRY' ? 'Telemetría' : 'Foto'} → {step.target_node_id}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveStepFromNewRoutine(idx)}
+                                                        className="text-rose-500 hover:text-rose-700"
+                                                    >
+                                                        Quitar
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Configurar Paso a Añadir */}
+                                    <div className="bg-indigo-50/45 border border-indigo-100 p-3.5 rounded-xl space-y-3">
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-indigo-900 mb-1 uppercase tracking-wider">Nodo Destino</label>
+                                            <select
+                                                value={stepNode}
+                                                onChange={(e) => setStepNode(e.target.value)}
+                                                className="w-full rounded-lg border border-gray-300 py-1.5 px-3 text-xs bg-white text-gray-850 font-bold"
+                                            >
+                                                {nodes.map(n => (
+                                                    <option key={n.node_id} value={n.node_id}>{n.node_id}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-indigo-900 mb-1 uppercase tracking-wider">Acción</label>
+                                            <select
+                                                value={stepType}
+                                                onChange={(e) => setStepType(e.target.value)}
+                                                className="w-full rounded-lg border border-gray-300 py-1.5 px-3 text-xs bg-white text-gray-850 font-bold"
+                                            >
+                                                <option value="POLL_TELEMETRY">Pedir Telemetría</option>
+                                                <option value="POLL_IMAGE">Pedir Imagen</option>
+                                            </select>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddStepToNewRoutine}
+                                            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
+                                        >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            Añadir a la Cola
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-3 w-full">
+                                    {editingRoutineId !== null && (
+                                        <button
+                                            type="button"
+                                            onClick={handleCancelEdit}
+                                            className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl text-sm transition shadow-sm"
+                                        >
+                                            Cancelar
+                                        </button>
+                                    )}
+                                    <button
+                                        type="submit"
+                                        disabled={isSavingRoutine || newRoutineSteps.length === 0}
+                                        className="flex-grow flex-1 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 shadow-md shadow-indigo-600/10"
+                                    >
+                                        {editingRoutineId !== null ? 'Guardar Cambios' : 'Guardar Rutina'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

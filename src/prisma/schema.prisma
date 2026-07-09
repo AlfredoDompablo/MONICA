@@ -105,3 +105,65 @@ model NetworkCommand {
 
   @@map("network_commands")
 }
+
+/// Modelo de Rutina de Monitoreo
+/// Define horarios programados y estado de las rutinas automáticas.
+model Routine {
+  routine_id   Int                @id @default(autoincrement())
+  name         String             @db.VarChar(100)
+  description  String?            @db.Text
+  days_of_week String             @db.VarChar(50) // Coma-separated string: "1,3,5" (1=Lunes, 3=Miércoles, etc.)
+  hour         Int                // 0-23
+  minute       Int                // 0-59
+  is_active    Boolean            @default(true)
+  created_at   DateTime           @default(now()) @db.Timestamp(6)
+  steps        RoutineStep[]
+  executions   RoutineExecution[]
+
+  @@map("routines")
+}
+
+/// Modelo de Paso de Rutina
+/// Registra cada comando específico dentro de la cola secuencial de la rutina.
+model RoutineStep {
+  step_id        Int              @id @default(autoincrement())
+  routine_id     Int
+  type           String           @db.VarChar(50) // 'POLL_TELEMETRY', 'POLL_IMAGE' (el PING es implícito antes de iniciar)
+  target_node_id String           @db.VarChar(20)
+  order          Int
+  routine        Routine          @relation(fields: [routine_id], references: [routine_id], onDelete: Cascade)
+
+  @@map("routine_steps")
+}
+
+/// Modelo de Ejecución de Rutina
+/// Rastrear cada corrida de rutina en curso o finalizada.
+model RoutineExecution {
+  execution_id Int                    @id @default(autoincrement())
+  routine_id   Int
+  status       String                 @db.VarChar(20) // 'RUNNING', 'COMPLETED', 'FAILED'
+  started_at   DateTime               @default(now()) @db.Timestamp(6)
+  finished_at  DateTime?              @db.Timestamp(6)
+  routine      Routine                @relation(fields: [routine_id], references: [routine_id], onDelete: Cascade)
+  steps        RoutineExecutionStep[]
+
+  @@map("routine_executions")
+}
+
+/// Modelo de Paso de Ejecución
+/// Asocia cada paso de una corrida con el comando de red generado y su estado.
+model RoutineExecutionStep {
+  exec_step_id Int              @id @default(autoincrement())
+  execution_id Int
+  step_id      Int?             // Opcional para pasos de pre-ping dinámicos
+  node_id      String?          @db.VarChar(20) // Nodo al que va dirigido
+  type         String?          @db.VarChar(50) // 'PRE_PING', 'POLL_TELEMETRY', 'POLL_IMAGE'
+  attempt      Int              @default(1)     // Intento de ping (máx 3)
+  command_id   Int?             // ID del NetworkCommand generado para este paso
+  status       String           @db.VarChar(20) // 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED'
+  started_at   DateTime?        @db.Timestamp(6)
+  finished_at  DateTime?        @db.Timestamp(6)
+  execution    RoutineExecution @relation(fields: [execution_id], references: [execution_id], onDelete: Cascade)
+
+  @@map("routine_execution_steps")
+}

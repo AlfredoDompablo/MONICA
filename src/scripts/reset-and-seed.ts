@@ -37,7 +37,7 @@ async function main() {
         console.log('Creando nodos nuevos...');
         
         // Nodo Concentrador (Master Gateway) con la API Key configurada
-        const concentradorHash = '0734638943f7f2e77196d880e3846523280804f5ab6879860e116ce934a1b59d';
+        const concentradorHash = 'ed39d1d166504e678aa2fee762ed795bb1028920b53fbec3a795e4a3be0a20ed';
         await prisma.node.create({
             data: {
                 node_id: 'NODE_C',
