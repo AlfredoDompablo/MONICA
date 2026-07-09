@@ -182,6 +182,10 @@ unsigned long lastRelayScreenTime =
 bool isRelayScreenActive = false; // Bandera para indicar que la pantalla de
                                   // retransmisión está visible.
 
+// --- Variables de Control No-Bloqueante para Pantalla Temporal (TX/RX) ---
+unsigned long lastTemporaryScreenTime = 0; // Registra cuándo se mostró la pantalla temporal.
+bool isTemporaryScreenActive = false;      // Bandera para indicar que la pantalla temporal está visible.
+
 // Icono de Satélite de 8x8 píxeles
 const uint8_t satellite_icon[] PROGMEM = {0x00, 0x60, 0x68, 0x1c,
                                           0x38, 0x76, 0x26, 0x00};
@@ -475,8 +479,8 @@ void sendSensorTelemetry(uint8_t destId) {
 
   // Regresar inmediatamente al modo de escucha
   radio.startReceive();
-  delay(1500); // Dar margen para visualizar la información en pantalla
-  drawDashboard();
+  isTemporaryScreenActive = true;
+  lastTemporaryScreenTime = millis();
 }
 
 /**
@@ -553,7 +557,7 @@ void requestAndSendImage(uint8_t destId) {
   ackPacket.header.destId = destId;
   ackPacket.header.nextHopId =
       (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
-  ackPacket.header.type = ACK;
+  ackPacket.header.type = ACK_PROCESSING;
   ackPacket.header.seqNum = packetSequence++;
   ackPacket.header.ttl = 5;
   radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
@@ -626,9 +630,9 @@ void requestAndSendImage(uint8_t destId) {
     
     setScreenStatus("ERROR CAMARA", "Tamanio invalido", "Apagando camara");
     digitalWrite(CAM_EN, LOW); // Apagar cámara ante error
-    radio.startReceive();
     delay(1500);
     drawDashboard();
+    radio.startReceive();
     return;
   }
 
@@ -932,8 +936,8 @@ void requestAndSendImage(uint8_t destId) {
   // Cerrar archivo de lectura y liberar recursos
   readImgFile.close();
   radio.startReceive();
-  delay(1000);
-  drawDashboard();
+  isTemporaryScreenActive = true;
+  lastTemporaryScreenTime = millis();
 }
 
 /**
@@ -1365,8 +1369,6 @@ void handleLoRa() {
             }
 
             if (shouldRelay) {
-              size_t packetLen = radio.getPacketLength();
-
               bool isUpstream = (rxPacket.header.srcId > MY_NODE_ID &&
                                  rxPacket.header.destId < MY_NODE_ID);
               uint8_t prevHop =
@@ -1434,7 +1436,7 @@ void loop() {
   // Batería
   if (millis() - lastScreenUpdate > 5000) {
     lastScreenUpdate = millis();
-    if (!isRelayScreenActive && screenStatus == "ESCUCHANDO") {
+    if (!isRelayScreenActive && !isTemporaryScreenActive && screenStatus == "ESCUCHANDO") {
       updateTFT();
     }
   }
@@ -1443,6 +1445,16 @@ void loop() {
   // pantalla de repetidor
   if (isRelayScreenActive && (millis() - lastRelayScreenTime > 2000)) {
     isRelayScreenActive = false;
+    drawDashboard();
+  }
+
+  // Retornar al dashboard en espera de forma no-bloqueante tras 2 segundos en
+  // pantalla de estado temporal
+  if (isTemporaryScreenActive && (millis() - lastTemporaryScreenTime > 2000)) {
+    isTemporaryScreenActive = false;
+    screenStatus = "ESCUCHANDO";
+    screenActivity = "Listo";
+    screenProgress = "";
     drawDashboard();
   }
 
