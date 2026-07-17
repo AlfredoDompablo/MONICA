@@ -32,6 +32,20 @@
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
+void setScreenStatus(String title, String line1, String line2);
+static void smartDelay(unsigned long ms);
+void handleLoRa();
+
+bool routeAwake[5] = {false, false, false, false, false};
+
+// El concentrador consulta el estado real de la ruta para decidir si usar preámbulo largo
+bool isNodeSleeping(uint8_t nodeId) {
+  if (nodeId >= 1 && nodeId <= 4) {
+    return !routeAwake[nodeId];
+  }
+  return false;
+}
+
 
 // ============================================================================
 // --- DEFINICIONES DE HARDWARE DEL CONCENTRADOR ---
@@ -71,6 +85,7 @@ void updateCommandStatus(int commandId, String status, String response);
 void checkPendingCommands();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMQTT();
+void executeMqttCommand();
 
 
 // ============================================================================
@@ -89,6 +104,148 @@ SPIClass* spiSD = nullptr;
 
 /// Transceptor LoRa SX1262 asociado al bus SPI FSPI predeterminado
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
+
+unsigned long getDynamicTimeout(uint8_t targetNode, bool isImage) {
+  unsigned long base = isImage ? 15000 : 4000;
+  return base + (targetNode - 1) * 500;
+}
+
+int transmitLoRa(uint8_t* buffer, size_t size) {
+  LoRaPacket* packet = (LoRaPacket*)buffer;
+  uint8_t nextHop = packet->header.nextHopId;
+  uint8_t type = packet->header.type;
+  
+  // SOLUCIÓN AL BUG DE PREÁMBULO:
+  // radio.transmit() internamente llama a setPacketParams(), sobreescribiendo
+  // cualquier setPreambleLength() previo con el valor cacheado internamente en
+  // el objeto RadioLib. Por eso, setPreambleLength() DEBE llamarse justo antes
+  // de transmit() para actualizar el caché, que luego transmit() aplicará.
+  bool requireLongPreamble = (type == CMD_WAKEUP && isNodeSleeping(nextHop));
+
+  if (requireLongPreamble) {
+    // CAD_PREAMBLE_SYMBOLS = 11200 símbolos = ~2849ms en SF7/BW500.
+    // Cubre un ciclo completo de CAD_SLEEP_MS (2500ms) + margen de latencia.
+    radio.setPreambleLength(CAD_PREAMBLE_SYMBOLS);  // Actualiza caché interno RadioLib
+  }
+  // Si no requiere preámbulo largo, el caché ya tiene LORA_PREAMBLE_LEN.
+
+  int state = radio.transmit(buffer, size);  // Usa el caché interno para setPacketParams()
+
+  // Restaurar el preámbulo normal en el caché para TX/RX futuros.
+  radio.setPreambleLength(LORA_PREAMBLE_LEN);
+  return state;
+}
+
+extern uint16_t packetSequence;
+
+void broadcastSleepCommand() {
+  LoRaPacket packet;
+  memset(&packet, 0, sizeof(LoRaHeader));
+  packet.header.syncWord[0] = LORA_SYNC_0;
+  packet.header.syncWord[1] = LORA_SYNC_1;
+  packet.header.srcId = 0; // Concentrador
+  packet.header.destId = 0xFF; // Broadcast
+  packet.header.nextHopId = 1; // Inicia por el Nodo 1
+  packet.header.type = CMD_GO_TO_SLEEP;
+  packet.header.seqNum = packetSequence++;
+  packet.header.ttl = 5;
+  
+  Serial.println("[LOWPOWER] Enviando comando de apagado en cascada CMD_GO_TO_SLEEP...");
+  transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
+  for (int i = 1; i <= 4; i++) {
+    routeAwake[i] = false;
+  }
+}
+
+struct MqttCommand {
+  bool pending = false;
+  int commandId = 0;
+  String type = "";
+  String targetNodeId = "";
+  int nodeNum = 0;
+  String payload = "";
+};
+MqttCommand pendingMqttCmd;
+
+bool wakeupAckReceived = false;
+uint8_t wakeupAckSrc = 0;
+
+bool wakeupRoute(uint8_t targetNode) {
+  if (!isNodeSleeping(targetNode)) {
+    return true;
+  }
+  
+  Serial.printf("[WAKEUP] Iniciando despertar de la ruta hacia el Nodo %d...\n", targetNode);
+  setScreenStatus("DESPERTANDO NODO", "Destino: Nodo " + String(targetNode), "Esp. ACK_WAKEUP...");
+  
+  LoRaPacket packet;
+  memset(&packet, 0, sizeof(LoRaHeader));
+  packet.header.syncWord[0] = LORA_SYNC_0;
+  packet.header.syncWord[1] = LORA_SYNC_1;
+  packet.header.srcId = 0; // Concentrador
+  packet.header.destId = targetNode;
+  packet.header.nextHopId = 1; // Primer salto hacia sensores remotos
+  packet.header.type = CMD_WAKEUP;
+  packet.header.seqNum = packetSequence++;
+  packet.header.ttl = 5;
+  
+  wakeupAckReceived = false;
+  wakeupAckSrc = 0;
+  
+  radio.standby();
+  delay(50);
+  transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
+  radio.startReceive();
+  
+  unsigned long waitStart = millis();
+  // Cada salto adicional hacia el objetivo agrega una transmisión de preámbulo largo (8s de margen por salto)
+  // más el tiempo de propagación del ACK de retorno (cortos) y procesamiento.
+  unsigned long timeoutVal = (targetNode - 1) * 8000 + 5000;
+  while (millis() - waitStart < timeoutVal) {
+    smartDelay(10);
+    handleLoRa();
+    if (wakeupAckReceived && wakeupAckSrc == targetNode) {
+      Serial.printf("[WAKEUP] Confirmacion recibida del Nodo %d! Ruta activa.\n", targetNode);
+      return true;
+    }
+  }
+  
+  Serial.printf("[WAKEUP] TIMEOUT esperando confirmacion de despertar del Nodo %d.\n", targetNode);
+  setScreenStatus("WAKEUP TIMEOUT", "Nodo: " + String(targetNode), "Fallo");
+  return false;
+}
+
+unsigned long lastRouteAwakeTime = 0;
+
+bool prepareRoute(uint8_t destNode) {
+  // CORRECCIÓN CRÍTICA: El check de IDLE_TIMEOUT_MS debe ejecutarse ANTES de
+  // consultar isNodeSleeping(), porque routeAwake[] puede estar marcado como
+  // "despierto" aunque los nodos ya se hayan vuelto a dormir por inactividad.
+  // Si el check quedara dentro del if(isNodeSleeping()), nunca se evaluaría
+  // cuando routeAwake[destNode] = true, causando el envío con preámbulo corto.
+  if (millis() - lastRouteAwakeTime > IDLE_TIMEOUT_MS) {
+    Serial.println("[ROUTE] Cache de ruta expirada. Invalidando routeAwake[] para forzar re-wakeup.");
+    for (int i = 1; i <= 4; i++) {
+      routeAwake[i] = false;
+    }
+  }
+
+  if (!routeAwake[destNode]) {
+    // El nodo (o su ruta) está dormido — ejecutar secuencia de despertar con preámbulo largo
+    if (wakeupRoute(destNode)) {
+      for (int i = 1; i <= destNode; i++) {
+        routeAwake[i] = true;
+      }
+      lastRouteAwakeTime = millis();
+      return true;
+    }
+    return false;
+  }
+
+  // Nodo confirmado despierto — actualizar timestamp de actividad
+  lastRouteAwakeTime = millis();
+  return true;
+}
 
 // ============================================================================
 // --- VARIABLES DE ESTADO Y FLUJO ---
@@ -750,7 +907,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
             ackPacket.header.ttl = 5;
             
             delay(80); 
-            radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
+            transmitLoRa((uint8_t*)&ackPacket, sizeof(LoRaHeader));
             radio.startReceive();
             return;
         }
@@ -819,7 +976,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
                 memcpy(nackPacket.payload + 2, firstMissing, missingCount * 2);
                 
                 delay(80); 
-                radio.transmit((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
+                transmitLoRa((uint8_t*)&nackPacket, sizeof(LoRaHeader) + 2 + (missingCount * 2));
                 radio.startReceive();
                 return;
             }
@@ -864,7 +1021,7 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
         ackPacket.header.ttl = 5;
         
         delay(80); 
-        radio.transmit((uint8_t*)&ackPacket, sizeof(LoRaHeader));
+        transmitLoRa((uint8_t*)&ackPacket, sizeof(LoRaHeader));
         radio.startReceive();
 
         expectedSeqNum = 0; 
@@ -950,6 +1107,11 @@ void handleImageFragment(LoRaPacket* packet, size_t payloadLen) {
  * @brief Envía comando LoRa para interrogar a un nodo sensor.
  */
 void pollNode(uint8_t nodeToPoll, PacketType cmd) {
+    if (!prepareRoute(nodeToPoll)) {
+        Serial.printf("[WAKEUP] Error al despertar la ruta al Nodo %d. Abortando pollNode.\n", nodeToPoll);
+        return;
+    }
+
     LoRaPacket packet;
     memset(&packet, 0, sizeof(LoRaHeader));
     packet.header.syncWord[0] = LORA_SYNC_0;
@@ -967,8 +1129,9 @@ void pollNode(uint8_t nodeToPoll, PacketType cmd) {
     radio.standby();
     delay(50); // Pequeño margen para estabilidad eléctrica y RF frente a actividad WiFi en background
     
-    int txState = radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+    int txState = transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
     Serial.printf("Polling Node %d with CMD 0x%02X, TX State: %d\n", nodeToPoll, cmd, txState);
+    responseReceived = false; // Evita confundir el ACK_WAKEUP previo con la telemetría real
     radio.startReceive();
 }
 
@@ -995,8 +1158,13 @@ void handleLoRa() {
                     size_t packetLen = radio.getPacketLength();
                     size_t payloadLen = packetLen - sizeof(LoRaHeader);
 
+                    if (packet.header.type == ACK_WAKEUP) {
+                        wakeupAckReceived = true;
+                        wakeupAckSrc = packet.header.srcId;
+                        responseReceived = true;
+                    }
                     // Telemetría ambiental
-                    if (packet.header.type == DATA_TELEMETRY) {
+                    else if (packet.header.type == DATA_TELEMETRY) {
                         SensorPayload* sp = (SensorPayload*)packet.payload;
                         setScreenStatus("RX TELEMETRIA", "De Nodo " + String(packet.header.srcId), "Bat: " + String(sp->battery_level) + "% | Temp: " + String(sp->temperature, 1) + "C");
                         
@@ -1134,7 +1302,7 @@ void handleSerial() {
             responseReceived = false;
             currentAttempt = 1;
             requestSentTime = millis();
-            currentTimeout = pollForImage ? 6000 : 3500;
+            currentTimeout = getDynamicTimeout(targetNode, pollForImage);
             pollState = POLL_STATE_WAITING_RESPONSE;
             
             PacketType cmd = pollForImage ? CMD_REQ_IMAGE : CMD_REQ_TELEMETRY;
@@ -1227,7 +1395,7 @@ void checkPendingCommands() {
             isGpsNotFixed = false;
             currentAttempt = 1;
             requestSentTime = millis();
-            currentTimeout = 3500;
+            currentTimeout = getDynamicTimeout(nodeNum, false);
             pollState = POLL_STATE_WAITING_RESPONSE;
             targetNode = nodeNum;
             pollForImage = false;
@@ -1235,7 +1403,7 @@ void checkPendingCommands() {
             pollNode(nodeNum, CMD_REQ_TELEMETRY);
             
             unsigned long waitStart = millis();
-            while (millis() - waitStart < 4000) {
+            while (millis() - waitStart < currentTimeout + 1000) {
                 smartDelay(10);
                 handleLoRa();
                 if (responseReceived) {
@@ -1264,8 +1432,8 @@ void checkPendingCommands() {
             responseReceived = false;
             currentAttempt = 1;
             requestSentTime = millis();
-            currentTimeout = 15000; // 15 segundos por intento de handshake para dar tiempo al nodo a procesar
-            pollState = POLL_STATE_WAITING_RESPONSE; // Habilitar reintentos en el bucle principal
+            currentTimeout = getDynamicTimeout(nodeNum, true);
+            pollState = POLL_STATE_WAITING_RESPONSE;
             targetNode = nodeNum;
             pollForImage = true;
             
@@ -1283,6 +1451,11 @@ void checkPendingCommands() {
             sendNetworkLog("INFO", "Comando " + type + " iniciado con éxito. Descargando chunks...", targetNodeId);
         }
         else if (type == "CONFIG_CAMERA") {
+            if (!prepareRoute(nodeNum)) {
+                updateCommandStatus(commandId, "FAILED", "Error: No se pudo despertar la ruta LoRa al nodo.");
+                sendNetworkLog("ERROR", "Error ejecutando comando CONFIG_CAMERA: Timeout despertando ruta.", targetNodeId);
+                return;
+            }
             String paramStr = cmdObj["parameters"].as<String>();
             int resVal = 10, brVal = 0, coVal = 1, qtyVal = 24;
             int saVal = 0, efVal = 0, wbVal = 1, awVal = 1, wmVal = 0, ecVal = 1, a2Val = 0, alVal = 0, avVal = 300;
@@ -1360,11 +1533,12 @@ void checkPendingCommands() {
             lastResponseWasNack = false;
             lastNackMsg = "";
             targetNode = nodeNum;
-            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+            transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
             radio.startReceive();
             
             unsigned long waitStart = millis();
-            while (millis() - waitStart < 4000) {
+            unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+            while (millis() - waitStart < timeoutVal) {
                 smartDelay(10);
                 handleLoRa();
                 if (responseReceived) {
@@ -1394,6 +1568,11 @@ void checkPendingCommands() {
             }
         }
         else if (type == "GET_CAMERA_CONFIG") {
+            if (!prepareRoute(nodeNum)) {
+                updateCommandStatus(commandId, "FAILED", "Error: No se pudo despertar la ruta LoRa al nodo.");
+                sendNetworkLog("ERROR", "Error ejecutando comando GET_CAMERA_CONFIG: Timeout despertando ruta.", targetNodeId);
+                return;
+            }
             LoRaPacket packet;
             memset(&packet, 0, sizeof(LoRaHeader));
             packet.header.syncWord[0] = LORA_SYNC_0;
@@ -1410,11 +1589,12 @@ void checkPendingCommands() {
             lastNackMsg = "";
             gotCamConfigData = false;
             targetNode = nodeNum;
-            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+            transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
             radio.startReceive();
             
             unsigned long waitStart = millis();
-            while (millis() - waitStart < 5000) {
+            unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+            while (millis() - waitStart < timeoutVal) {
                 smartDelay(10);
                 handleLoRa();
                 if (responseReceived) {
@@ -1486,6 +1666,11 @@ void checkPendingCommands() {
             }
         }
         else if (type == "PING") {
+            if (!prepareRoute(nodeNum)) {
+                updateCommandStatus(commandId, "FAILED", "Error: No se pudo despertar la ruta LoRa al nodo.");
+                sendNetworkLog("ERROR", "Error ejecutando comando PING: Timeout despertando ruta.", targetNodeId);
+                return;
+            }
             LoRaPacket packet;
             memset(&packet, 0, sizeof(LoRaHeader));
             packet.header.syncWord[0] = LORA_SYNC_0;
@@ -1499,11 +1684,12 @@ void checkPendingCommands() {
             
             responseReceived = false;
             targetNode = nodeNum;
-            radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+            transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
             radio.startReceive();
             
             unsigned long waitStart = millis();
-            while (millis() - waitStart < 3000) {
+            unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+            while (millis() - waitStart < timeoutVal) {
                 smartDelay(10);
                 handleLoRa();
                 if (responseReceived) {
@@ -1566,8 +1752,16 @@ void loop() {
   handleLoRa();
   handleSerial();
 
-  // Mantener conexión MQTT activa y procesar callbacks
-  if (WiFi.status() == WL_CONNECTED) {
+  // Mantener conexión WiFi y MQTT activa
+  if (WiFi.status() != WL_CONNECTED) {
+    static unsigned long lastWifiAttempt = 0;
+    if (millis() - lastWifiAttempt > 10000) { // Intentar reconectar cada 10 segundos
+      lastWifiAttempt = millis();
+      Serial.println("[WIFI] Desconectado. Intentando reconectar a la red WiFi...");
+      WiFi.disconnect();
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
+  } else {
     if (!mqttClient.connected()) {
       reconnectMQTT();
     } else {
@@ -1615,7 +1809,10 @@ void loop() {
   // --- CONTROL DE MÁQUINA DE ESTADOS DE POLLING ---
   if (expectedSeqNum == 0) {
       if (pollState == POLL_STATE_IDLE) {
-          // El polling automático está desactivado por defecto (se realiza de forma manual vía puerto serie)
+          if (pendingMqttCmd.pending) {
+              pendingMqttCmd.pending = false;
+              executeMqttCommand();
+          }
       }
       else if (pollState == POLL_STATE_WAITING_RESPONSE) {
           if (responseReceived) {
@@ -1706,17 +1903,36 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 
   Serial.printf("[MQTT COMMAND] ID %d, Tipo %s, Destino %s\n", commandId, type.c_str(), targetNodeId.c_str());
-  if (type != "POLL_IMAGE") {
-      sendNetworkLog("INFO", "Recibido comando MQTT " + type + " para " + targetNodeId + ". Ejecutando...", "NODE_C");
-      updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa vía MQTT...");
-  }
-
+  
   int nodeNum = 1;
   if (targetNodeId.startsWith("NODE_00")) {
       nodeNum = targetNodeId.substring(7).toInt();
   } else if (targetNodeId.startsWith("NODE_")) {
       nodeNum = targetNodeId.substring(5).toInt();
   }
+
+  if (type != "POLL_IMAGE") {
+      sendNetworkLog("INFO", "Recibido comando MQTT " + type + " para " + targetNodeId + ". Puesto en cola...", "NODE_C");
+      updateCommandStatus(commandId, "PROCESSING", "Iniciando transmisión LoRa vía MQTT...");
+  }
+
+  pendingMqttCmd.pending = true;
+  pendingMqttCmd.commandId = commandId;
+  pendingMqttCmd.type = type;
+  pendingMqttCmd.targetNodeId = targetNodeId;
+  pendingMqttCmd.nodeNum = nodeNum;
+  pendingMqttCmd.payload = message;
+}
+
+void executeMqttCommand() {
+  String message = pendingMqttCmd.payload;
+  DynamicJsonDocument doc(2048);
+  deserializeJson(doc, message);
+  
+  int commandId = pendingMqttCmd.commandId;
+  String type = pendingMqttCmd.type;
+  String targetNodeId = pendingMqttCmd.targetNodeId;
+  int nodeNum = pendingMqttCmd.nodeNum;
 
   bool success = false;
   String responseMsg = "";
@@ -1726,7 +1942,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       isGpsNotFixed = false;
       currentAttempt = 1;
       requestSentTime = millis();
-      currentTimeout = 3500;
+      currentTimeout = getDynamicTimeout(nodeNum, false);
       pollState = POLL_STATE_WAITING_RESPONSE;
       targetNode = nodeNum;
       pollForImage = false;
@@ -1734,7 +1950,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       pollNode(nodeNum, CMD_REQ_TELEMETRY);
       
       unsigned long waitStart = millis();
-      while (millis() - waitStart < 4000) {
+      while (millis() - waitStart < currentTimeout + 1000) {
           smartDelay(10);
           handleLoRa();
           if (responseReceived) {
@@ -1763,8 +1979,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       responseReceived = false;
       currentAttempt = 1;
       requestSentTime = millis();
-      currentTimeout = 15000; // 15 segundos por intento de handshake para dar tiempo al nodo a procesar
-      pollState = POLL_STATE_WAITING_RESPONSE; // Habilitar reintentos en el bucle principal
+      currentTimeout = getDynamicTimeout(nodeNum, true);
+      pollState = POLL_STATE_WAITING_RESPONSE;
       targetNode = nodeNum;
       pollForImage = true;
       
@@ -1781,6 +1997,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       Serial.printf("LoRa Flow: Solicitud de imagen para Nodo %d iniciada. Esperando respuesta...\n", nodeNum);
   }
   else if (type == "CONFIG_CAMERA") {
+      if (!prepareRoute(nodeNum)) {
+          updateCommandStatus(commandId, "FAILED", "Error: No se pudo despertar la ruta LoRa al nodo.");
+          sendNetworkLog("ERROR", "Error ejecutando comando CONFIG_CAMERA: Timeout despertando ruta.", targetNodeId);
+          return;
+      }
       JsonObject paramDoc = doc["parameters"];
       int resVal = 10, brVal = 0, coVal = 1, qtyVal = 24;
       int saVal = 0, efVal = 0, wbVal = 1, awVal = 1, wmVal = 0, ecVal = 1, a2Val = 0, alVal = 0, avVal = 300;
@@ -1854,11 +2075,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       targetNode = nodeNum;
       radio.standby();
       delay(50);
-      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+      transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
       radio.startReceive();
       
       unsigned long waitStart = millis();
-      while (millis() - waitStart < 4000) {
+      unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+      while (millis() - waitStart < timeoutVal) {
           smartDelay(10);
           handleLoRa();
           if (responseReceived) {
@@ -1879,6 +2101,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
   }
   else if (type == "GET_CAMERA_CONFIG") {
+      if (!prepareRoute(nodeNum)) {
+          updateCommandStatus(commandId, "FAILED", "Error: No se pudo despertar la ruta LoRa al nodo.");
+          sendNetworkLog("ERROR", "Error ejecutando comando GET_CAMERA_CONFIG: Timeout despertando ruta.", targetNodeId);
+          return;
+      }
       LoRaPacket packet;
       memset(&packet, 0, sizeof(LoRaHeader));
       packet.header.syncWord[0] = LORA_SYNC_0;
@@ -1897,11 +2124,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       targetNode = nodeNum;
       radio.standby();
       delay(50);
-      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+      transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
       radio.startReceive();
       
       unsigned long waitStart = millis();
-      while (millis() - waitStart < 5000) {
+      unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+      while (millis() - waitStart < timeoutVal) {
           smartDelay(10);
           handleLoRa();
           if (responseReceived) {
@@ -1988,11 +2216,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       targetNode = nodeNum;
       radio.standby();
       delay(50);
-      radio.transmit((uint8_t*)&packet, sizeof(LoRaHeader));
+      transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
       radio.startReceive();
       
       unsigned long waitStart = millis();
-      while (millis() - waitStart < 3000) {
+      unsigned long timeoutVal = getDynamicTimeout(nodeNum, false);
+      while (millis() - waitStart < timeoutVal) {
           smartDelay(10);
           handleLoRa();
           if (responseReceived) {

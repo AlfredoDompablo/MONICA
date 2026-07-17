@@ -5,8 +5,12 @@ import time
 import glob
 from datetime import datetime
 
-# Descubrimiento automático de todos los puertos /dev/ttyACM* activos
+# Descubrimiento automático de todos los puertos /dev/ttyACM* activos y puerto virtual local
 ports = sorted(glob.glob("/dev/ttyACM*"))
+local_port = "/home/oscar/PT2/MONICA/ttyACM4"
+import os
+if os.path.exists(local_port):
+    ports.append(local_port)
 baudrate = 115200
 
 # Paleta de colores rotativa para diferenciar los nodos en consola
@@ -32,13 +36,13 @@ def monitor_port(port):
             ser = serial.Serial(port, baudrate, timeout=1)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] {port} CONECTADO con éxito.")
             
-            # Forzar reinicio de las placas para ver el proceso de arranque desde el inicio
-            ser.dtr = False
-            ser.rts = False
-            time.sleep(0.1)
-            ser.dtr = True
-            ser.rts = True
-            time.sleep(0.1)
+            # Evitamos resetear la placa al conectar para no interferir con la depuración del Light Sleep
+            # ser.dtr = False
+            # ser.rts = False
+            # time.sleep(0.1)
+            # ser.dtr = True
+            # ser.rts = True
+            # time.sleep(0.1)
             
             while True:
                 line = ser.readline()

@@ -57,6 +57,20 @@ uint8_t cam_colorbar = 0;
 // topología lineal.
 #define MY_NODE_ID 4
 
+// --- Configuración de bajo consumo (CAD & Sleep) ---
+#define ENABLE_SLEEP true // Todos los nodos sensores entran en modo de suspensión
+unsigned long lastActiveTime = 0;       // Marca de tiempo de la última actividad
+unsigned long lastCadDetectTime = 0;     // Marca de tiempo del último evento CAD detectado
+
+void resetActiveTimeout() {
+  lastActiveTime = millis();
+}
+
+// Los nodos sensores siempre asumen que otros nodos sensores pueden estar dormidos.
+// Esto asegura que el relay de CMD_WAKEUP use preámbulo largo.
+bool isNodeSleeping(uint8_t nodeId) {
+  return (nodeId >= 1 && nodeId <= 4);
+}
 // --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
 #if MY_NODE_ID == 2
 #define VEXT_PIN 37 // Control de energía para V1.0 (Nodo 2)
@@ -105,10 +119,112 @@ uint8_t cam_colorbar = 0;
 TinyGPSPlus gps; // Decodificador del protocolo NMEA para geolocalización.
 TFT_eSPI tft =
     TFT_eSPI(); // Controlador gráfico para la pantalla LCD/TFT integrada.
-SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST,
-                          LORA_BUSY); // Controlador LoRa SX1262 vía RadioLib.
+
+class SX1262Public : public SX1262 {
+public:
+  SX1262Public(Module* mod) : SX1262(mod) {}
+  using SX126x::clearIrqStatus;
+  using SX126x::getIrqStatus;
+
+  int16_t customStartChannelScan() {
+    if(getPacketType() != RADIOLIB_SX126X_PACKET_TYPE_LORA) {
+      return(RADIOLIB_ERR_WRONG_MODEM);
+    }
+
+    int16_t state = standby();
+    if(state != RADIOLIB_ERR_NONE) return state;
+
+    getMod()->setRfSwitchState(Module::MODE_RX);
+
+    // Solo mapear eventos CAD a DIO1. Los eventos de RX los gestionará
+    // startReceive() de RadioLib después de que confirmemos CadDetected.
+    // Con CAD_ONLY, el chip siempre vuelve a STDBY_RC al terminar el CAD,
+    // así que solo necesitamos saber si detectó señal o no.
+    state = setDioIrqParams(
+      RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE,
+      RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE);
+    if(state != RADIOLIB_ERR_NONE) return state;
+
+    // Limpiar todos los IRQs antes de armar el CAD para asegurar estado limpio.
+    state = clearIrqStatus();
+    if(state != RADIOLIB_ERR_NONE) return state;
+
+    // Parámetros de CAD (SetCadParams, opcode 0x88) según datasheet Tabla 13-71:
+    //
+    // data[0] cadSymbolNum : CAD_ON_4_SYMB (0x02) = 4 símbolos
+    //         En SF7/BW500: tiempo CAD = 4 × 0.256ms = 1.024ms + ~0.5 símbolo post-proceso.
+    //         Suficiente para detectar preámbulo LoRa con buena fiabilidad.
+    //
+    // data[1] cadDetPeak   : SF + 13 = 7 + 13 = 20
+    //         Umbral de detección de pico. Fórmula recomendada en AN1200.48 de Semtech.
+    //
+    // data[2] cadDetMin    : 10
+    //         Umbral mínimo de detección. Filtra ruido de fondo.
+    //
+    // data[3] cadExitMode  : 0x00 = CAD_ONLY
+    //         DECISIÓN CLAVE basada en el datasheet (Tabla 13-73):
+    //         CAD_ONLY → el chip SIEMPRE vuelve a STDBY_RC al finalizar,
+    //         sin importar si detectó señal o no. Esto elimina toda la
+    //         complejidad de manejar el estado RX automático (CAD_RX = 0x01)
+    //         y sus problemas de timing con DIO1.
+    //         Después de leer CadDetected en el IRQ, llamamos a
+    //         radio.startReceive() manualmente con estado limpio.
+    //
+    // data[4-6] cadTimeout : 0x000000 (sin timeout, no aplica en CAD_ONLY)
+    uint8_t data[7];
+    data[0] = RADIOLIB_SX126X_CAD_ON_4_SYMB;  // 4 símbolos
+    data[1] = LORA_SF + 13;                    // = 20 para SF7
+    data[2] = 10;
+    data[3] = 0x00;                            // CAD_ONLY: vuelve a STDBY_RC siempre
+    data[4] = 0x00;
+    data[5] = 0x00;
+    data[6] = 0x00;
+
+    state = getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD_PARAMS, data, 7);
+    if(state != RADIOLIB_ERR_NONE) return state;
+
+    return(getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD, NULL, 0));
+  }
+};
+
+SX1262Public radio = new Module(LORA_CS, LORA_DIO1, LORA_RST,
+                                LORA_BUSY); // Controlador LoRa SX1262 vía RadioLib.
 HardwareSerial camSerial(
     2); // Interfaz UART secundaria (Serial2) para transferencias de cámara.
+
+int transmitLoRa(uint8_t* buffer, size_t size) {
+  LoRaPacket* packet = (LoRaPacket*)buffer;
+  uint8_t nextHop = packet->header.nextHopId;
+  uint8_t type    = packet->header.type;
+
+  // Determinar si se requiere preámbulo largo para despertar nodos en CAD/sleep.
+  // Los nodos sensores (ID 1-4) siempre pueden estar en ciclo CAD/Sleep.
+  bool requireLongPreamble = (type == CMD_WAKEUP && isNodeSleeping(nextHop));
+
+  // SOLUCIÓN AL BUG DE PREÁMBULO:
+  // radio.transmit() internamente llama a startTransmit() que a su vez llama
+  // a setPacketParams(), sobreescribiendo cualquier setPreambleLength() previo
+  // con el valor cacheado en el objeto RadioLib (LORA_PREAMBLE_LEN = 8).
+  //
+  // Para garantizar el preámbulo correcto, primero actualizamos el caché
+  // INTERNO de RadioLib con setPreambleLength() y luego llamamos a transmit(),
+  // que leerá y usará ese mismo valor cacheado al configurar el chip.
+  // Esto funciona porque el caché interno y el registro del chip se sincronizan
+  // en el mismo setPacketParams() que transmit() llama internamente.
+  if (requireLongPreamble) {
+    radio.setPreambleLength(CAD_PREAMBLE_SYMBOLS);  // Actualiza caché interno RadioLib
+  }
+  // Si no requiere preámbulo largo, el caché ya tiene LORA_PREAMBLE_LEN (valor normal).
+
+  int state = radio.transmit(buffer, size);  // Usa el caché interno para setPacketParams()
+
+  // Restaurar siempre el preámbulo normal en el caché RadioLib para RX y TX futuros.
+  radio.setPreambleLength(LORA_PREAMBLE_LEN);
+
+  resetActiveTimeout();
+  return state;
+}
+
 
 // --- Variables de Estado Global ---
 uint16_t packetSequence =
@@ -314,6 +430,7 @@ void drawDashboard() { updateTFT(); }
  * @brief Configuración inicial del hardware del dispositivo.
  */
 void setup() {
+  resetActiveTimeout();
   Serial.begin(115200);
 
   preferences.begin("cam_config", false);
@@ -366,6 +483,7 @@ void setup() {
   pinMode(37, OUTPUT);
   digitalWrite(37, HIGH);
   pinMode(BACKLIGHT_PIN, OUTPUT);
+  gpio_sleep_sel_dis((gpio_num_t)BACKLIGHT_PIN);
   digitalWrite(BACKLIGHT_PIN,
                HIGH); // Encender retroiluminación de pantalla LCD.
   pinMode(CAM_EN, OUTPUT);
@@ -465,7 +583,7 @@ void sendSensorTelemetry(uint8_t destId) {
   setScreenStatus("ENVIANDO TELEM", "Dest: Conc (" + String(destId) + ")", "Pacing: " + String(DELAY_TX) + " ms");
 
   // Transmitir paquete por LoRa
-  int state = radio.transmit((uint8_t *)&packet, packetSize);
+  int state = transmitLoRa((uint8_t *)&packet, packetSize);
 
   if (state == RADIOLIB_ERR_NONE) {
     setScreenStatus("TELEMETRIA OK", "Transmitido!", "QoS: Directo");
@@ -559,7 +677,7 @@ void requestAndSendImage(uint8_t destId) {
   ackPacket.header.type = ACK_PROCESSING;
   ackPacket.header.seqNum = packetSequence++;
   ackPacket.header.ttl = 5;
-  radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
+  transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
   delay(100);
 
   // Inicializar interfaz gráfica de captura
@@ -625,7 +743,7 @@ void requestAndSendImage(uint8_t destId) {
     } else {
       strcpy((char *)nackPacket.payload, "CAM_SIZE_ERR");
     }
-    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
     
     setScreenStatus("ERROR CAMARA", "Tamanio invalido", "Apagando camara");
     digitalWrite(CAM_EN, LOW); // Apagar cámara ante error
@@ -658,7 +776,7 @@ void requestAndSendImage(uint8_t destId) {
     nackPacket.header.ttl = 5;
     
     strcpy((char *)nackPacket.payload, "FS_WRITE_ERR");
-    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
     
     setScreenStatus("ERROR FLASH", "Err Inicializar", "Apagando camara");
     digitalWrite(CAM_EN, LOW);
@@ -682,6 +800,7 @@ void requestAndSendImage(uint8_t destId) {
     if (getChunkFromCam(bytesDownloaded, lenToDownload, tempBuffer)) {
       imgFile.write(tempBuffer, lenToDownload);
       bytesDownloaded += lenToDownload;
+      resetActiveTimeout();
 
       // Mostrar progreso en pantalla
       setScreenStatus("CAMARA LINK", "Descargando...",
@@ -715,7 +834,7 @@ void requestAndSendImage(uint8_t destId) {
     nackPacket.header.ttl = 5;
     
     strcpy((char *)nackPacket.payload, "CAM_READ_ERR");
-    radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
+    transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
     
     setScreenStatus("ERROR CAMARA", "Descarga fallida", "Archivo borrado");
     LittleFS.remove("/temp_img.jpg");
@@ -757,7 +876,7 @@ void requestAndSendImage(uint8_t destId) {
   memcpy(packet.payload, &imgSize, 4);
   memcpy(packet.payload + 4, &totalChunks, 2);
 
-  radio.transmit((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
+  transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
   delay(
       1000); // Tiempo de guarda para inicializar archivo en SD del concentrador
 
@@ -785,7 +904,7 @@ void requestAndSendImage(uint8_t destId) {
     readImgFile.read(packet.payload, chunkLen);
 
     packet.header.seqNum = chunkIndex;
-    radio.transmit((uint8_t *)&packet, sizeof(LoRaHeader) + chunkLen);
+    transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + chunkLen);
     bytesSent += chunkLen;
 
     setScreenStatus("ENVIANDO CHUNKS", "Progreso: " + String(chunkIndex) + "/" + String(totalChunks), "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
@@ -803,7 +922,7 @@ void requestAndSendImage(uint8_t destId) {
   packet.header.seqNum = chunkIndex;
   memcpy(packet.payload, &imgSize, 4);
   memcpy(packet.payload + 4, &totalChunks, 2);
-  radio.transmit((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
+  transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
 
   setScreenStatus("ESPERANDO ACK", "Esp. Confirmacion", "Intento END: 1");
 
@@ -829,7 +948,7 @@ void requestAndSendImage(uint8_t destId) {
         packet.header.seqNum = chunkIndex;
         memcpy(packet.payload, &imgSize, 4);
         memcpy(packet.payload + 4, &totalChunks, 2);
-        radio.transmit((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
+        transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
 
         setScreenStatus("ESPERANDO ACK", "Retransmitiendo END", "Intento END: " + String(endRetryCount + 1));
 
@@ -898,7 +1017,7 @@ void requestAndSendImage(uint8_t destId) {
                   readImgFile.read(packet.payload, chunkLen);
 
                   packet.header.seqNum = seq;
-                  radio.transmit((uint8_t *)&packet,
+                  transmitLoRa((uint8_t *)&packet,
                                  sizeof(LoRaHeader) + chunkLen);
                   Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) "
                                 "desde Flash local\n",
@@ -916,7 +1035,7 @@ void requestAndSendImage(uint8_t destId) {
               packet.header.seqNum = chunkIndex;
               memcpy(packet.payload, &imgSize, 4);
               memcpy(packet.payload + 4, &totalChunks, 2);
-              radio.transmit((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
+              transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
 
               // Reiniciar temporizadores
               sessionStart = millis();
@@ -977,7 +1096,7 @@ void handleLoRa() {
         "[DEBUG LoRa] Evento RX! Estado lectura: %d, Longitud: %u bytes\n",
         state, packetLen);
 
-    if (state == RADIOLIB_ERR_NONE) {
+    if (state == RADIOLIB_ERR_NONE && packetLen > 0) {
       if (rxPacket.header.syncWord[0] == LORA_SYNC_0 &&
           rxPacket.header.syncWord[1] == LORA_SYNC_1) {
         Serial.printf("[DEBUG LoRa] Sync OK! Src: %d, Dest: %d, nextHop: %d, "
@@ -985,6 +1104,10 @@ void handleLoRa() {
                       rxPacket.header.srcId, rxPacket.header.destId,
                       rxPacket.header.nextHopId, rxPacket.header.type,
                       rxPacket.header.ttl);
+
+        // Cualquier paquete válido con sync word correcto en el aire mantiene el nodo despierto
+        // para dar tiempo a recibir la retransmisión del siguiente salto.
+        lastCadDetectTime = millis();
 
         // Comprobar tiempo de vida del paquete
         if (rxPacket.header.ttl > 0) {
@@ -1001,8 +1124,11 @@ void handleLoRa() {
             return;
           }
 
-          // ¿El paquete está dirigido formalmente a mi ID final?
-          if (rxPacket.header.destId == MY_NODE_ID) {
+          // Confirmamos que somos el salto físico correcto para este paquete
+          resetActiveTimeout();
+
+          // ¿El paquete está dirigido formalmente a mi ID final o es broadcast?
+          if (rxPacket.header.destId == MY_NODE_ID || rxPacket.header.destId == 0xFF) {
             Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n",
                           rxPacket.header.type, rxPacket.header.srcId);
 
@@ -1036,7 +1162,7 @@ void handleLoRa() {
                 nackPacket.header.ttl = 5;
 
                 strcpy((char *)nackPacket.payload, "GPS_NO_FIX");
-                radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 11);
+                transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 11);
                 radio.startReceive();
                 Serial.println("[GPS WARNING] Petición de telemetría recibida "
                                "pero no hay GPS fix. Enviado NACK.");
@@ -1158,7 +1284,7 @@ void handleLoRa() {
                 ackPacket.header.type = ACK;
                 ackPacket.header.seqNum = packetSequence++;
                 ackPacket.header.ttl = 5;
-                radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
+                transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
                 radio.startReceive();
                 Serial.println("[LORA] Enviado ACK de configuracion exitosa al concentrador.");
               } else {
@@ -1174,7 +1300,7 @@ void handleLoRa() {
                 nackPacket.header.seqNum = packetSequence++;
                 nackPacket.header.ttl = 5;
                 strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
-                radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
+                transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
                 radio.startReceive();
                 Serial.println("[LORA WARNING] Enviado NACK (CAMERA_TIMEOUT) al concentrador.");
               }
@@ -1312,7 +1438,7 @@ void handleLoRa() {
                 ccp->dcw = dw;
                 ccp->colorbar = cb;
 
-                radio.transmit((uint8_t *)&respPacket, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+                transmitLoRa((uint8_t *)&respPacket, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
                 radio.startReceive();
                 Serial.println("[LORA] Enviada configuracion de camara leida con exito al concentrador.");
               } else {
@@ -1328,7 +1454,7 @@ void handleLoRa() {
                 nackPacket.header.seqNum = packetSequence++;
                 nackPacket.header.ttl = 5;
                 strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
-                radio.transmit((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
+                transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
                 radio.startReceive();
                 Serial.println("[LORA WARNING] Fallo al leer camara, enviado NACK.");
               }
@@ -1345,7 +1471,40 @@ void handleLoRa() {
               ackPacket.header.type = ACK;
               ackPacket.header.seqNum = packetSequence++;
               ackPacket.header.ttl = 5;
-              radio.transmit((uint8_t *)&ackPacket, sizeof(LoRaHeader));
+              transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
+              radio.startReceive();
+            } else if (rxPacket.header.type == CMD_GO_TO_SLEEP) {
+              Serial.println("[LOWPOWER] Recibido CMD_GO_TO_SLEEP!");
+              if (MY_NODE_ID < 4) {
+                LoRaPacket sleepPacket;
+                memcpy(&sleepPacket, &rxPacket, sizeof(LoRaPacket));
+                sleepPacket.header.srcId = MY_NODE_ID;
+                sleepPacket.header.nextHopId = MY_NODE_ID + 1;
+                Serial.printf("[LOWPOWER] Propagando GO_TO_SLEEP al Nodo %d\n", MY_NODE_ID + 1);
+                transmitLoRa((uint8_t*)&sleepPacket, sizeof(LoRaHeader));
+              }
+              // Forzar suspensión inmediata: resetear ambos temporizadores
+              // para evitar que el grace period de CAD mantenga el nodo despierto
+              lastActiveTime = millis() - IDLE_TIMEOUT_MS;
+              lastCadDetectTime = 0; // Anular grace period de 35s
+              radio.startReceive();
+            } else if (rxPacket.header.type == CMD_WAKEUP) {
+              Serial.println("[LOWPOWER] Recibido CMD_WAKEUP (Destino final)!");
+              LoRaPacket ackPacket;
+              memset(&ackPacket, 0, sizeof(LoRaHeader));
+              ackPacket.header.syncWord[0] = LORA_SYNC_0;
+              ackPacket.header.syncWord[1] = LORA_SYNC_1;
+              ackPacket.header.srcId = MY_NODE_ID;
+              ackPacket.header.destId = rxPacket.header.srcId;
+              ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
+                                               ? (MY_NODE_ID - 1)
+                                               : (MY_NODE_ID + 1);
+              ackPacket.header.type = ACK_WAKEUP;
+              ackPacket.header.seqNum = packetSequence++;
+              ackPacket.header.ttl = 5;
+              
+              delay(80); // Margen de estabilidad
+              transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
               radio.startReceive();
             }
           }
@@ -1385,10 +1544,15 @@ void handleLoRa() {
               // directo
               rxPacket.header.nextHopId = nextHop;
 
+              // Para CMD_WAKEUP en relay, transmitLoRa() aplica automáticamente el
+              // preámbulo largo usando CAD_PREAMBLE_SYMBOLS (constante pre-calculada)
+              // ya que isNodeSleeping() siempre retorna true para IDs 1-4 en nodos sensor.
+              // NO llamar setPreambleLength() aquí para evitar doble configuración.
+
               // Backoff defensivo para des-sincronizar colisiones en el aire
               delay(40);
 
-              radio.transmit((uint8_t *)&rxPacket, packetLen);
+              transmitLoRa((uint8_t *)&rxPacket, packetLen);
               radio.startReceive(); // Regresar inmediatamente a modo escucha
               Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId,
                             rxPacket.header.destId);
@@ -1459,4 +1623,106 @@ void loop() {
 
   smartDelay(10); // Alimentar decodificador GPS
   handleLoRa();   // Procesar actividades de red
+
+  // ============================================================================
+  // LÓGICA DE BAJO CONSUMO — Light Sleep + CAD (diseño según datasheet SX1262)
+  // ============================================================================
+  // El datasheet (Tabla 13-73) define dos modos de salida del CAD:
+  //   CAD_ONLY (0x00): el chip SIEMPRE vuelve a STDBY_RC al terminar.
+  //   CAD_RX   (0x01): si detecta señal, entra en RX automáticamente.
+  //
+  // Usamos CAD_ONLY porque garantiza que el chip está en STDBY_RC después
+  // del CAD. Esto permite leer/limpiar IRQs y llamar a startReceive() de
+  // RadioLib sin ninguna carrera de hardware en DIO1.
+  // ============================================================================
+  bool isGracePeriodActive = (millis() - lastCadDetectTime < 35000);
+  if (ENABLE_SLEEP && (millis() - lastActiveTime > IDLE_TIMEOUT_MS) && !isGracePeriodActive) {
+
+    // ── FASE 1: Entrar en Light Sleep ────────────────────────────────────────
+    setScreenStatus("DURMIENDO", "Bajo consumo", "");
+    delay(30);
+    digitalWrite(BACKLIGHT_PIN, LOW);
+    radio.sleep();                                              // Radio → Sleep (~1μA)
+    esp_sleep_enable_timer_wakeup((uint64_t)CAD_SLEEP_MS * 1000ULL);
+    esp_light_sleep_start();                                   // ← ESP32 duerme aquí
+
+    // ── FASE 2: Despertar → estabilizar TCXO ─────────────────────────────────
+    digitalWrite(BACKLIGHT_PIN, HIGH);
+    delay(10);          // Margen antes del primer acceso SPI
+    radio.standby();    // Radio: Sleep → Standby (activa TCXO)
+    delay(10);          // Esperar estabilización del oscilador
+
+    // ── FASE 3: CAD_ONLY — escaneo de canal ──────────────────────────────────
+    // customStartChannelScan() usa CAD_ONLY (0x00):
+    //   - Mapea solo CAD_DONE y CAD_DETECTED a DIO1
+    //   - Al finalizar (~1.5ms), el chip vuelve a STDBY_RC automáticamente
+    //   - NO entra en RX por hardware — nosotros lo iniciamos manualmente
+    int cadErr = radio.customStartChannelScan();
+    if (cadErr != RADIOLIB_ERR_NONE) {
+      Serial.printf("[CAD] Error SPI al armar CAD: %d\n", cadErr);
+      radio.sleep();
+      return;
+    }
+
+    // Esperar CadDone. Con SF7/BW500 y 4 símbolos: ~1ms + ~0.5 símbolo = ~1.5ms.
+    // Timeout de 30ms es > 20× el tiempo máximo esperado.
+    unsigned long cadStart = millis();
+    while (digitalRead(LORA_DIO1) == LOW) {
+      if (millis() - cadStart > 30UL) {
+        Serial.println("[CAD] Timeout CadDone (chip no respondio). Sleep.");
+        radio.sleep();
+        return;
+      }
+      delayMicroseconds(50);
+    }
+
+    // El chip está en STDBY_RC: leer y limpiar IRQs es 100% seguro.
+    uint16_t irq = radio.getIrqStatus();
+    radio.clearIrqStatus(RADIOLIB_SX126X_IRQ_ALL);
+    Serial.printf("[CAD] IRQ=0x%04X  CadDone=%d  CadDetected=%d\n",
+                  irq,
+                  (irq & RADIOLIB_SX126X_IRQ_CAD_DONE)     ? 1 : 0,
+                  (irq & RADIOLIB_SX126X_IRQ_CAD_DETECTED) ? 1 : 0);
+
+    if (irq & RADIOLIB_SX126X_IRQ_CAD_DETECTED) {
+      // ── FASE 4A: Señal LoRa detectada → RX manual ────────────────────────
+      // El concentrador está transmitiendo el preámbulo largo (11200 síms = ~2850ms).
+      // Con 4 símbolos de CAD (~1ms), queda ~2849ms de preámbulo + header + payload.
+      // startReceive() de RadioLib configura IRQs correctamente y pone el chip en RX.
+      lastCadDetectTime = millis();
+      Serial.println("[CAD] Señal detectada! Iniciando RX...");
+      setScreenStatus("ESCUCHANDO", "CAD: Señal RF", "Recibiendo...");
+
+      radio.startReceive();  // RadioLib gestiona IRQs, RF switch y estado internamente
+
+      // Esperar RX_DONE (o error de recepción).
+      // Peor caso: nodo detectó preámbulo al inicio → esperar hasta ~2852ms.
+      // Margen de 648ms sobre CAD_PREAMBLE_MS (3500ms total).
+      unsigned long rxStart = millis();
+      while (digitalRead(LORA_DIO1) == LOW) {
+        if (millis() - rxStart > (unsigned long)CAD_RX_TIMEOUT_MS) {
+          Serial.println("[CAD] Timeout esperando paquete. Sleep.");
+          radio.standby();
+          radio.sleep();
+          return;
+        }
+        delayMicroseconds(200);
+      }
+
+      // DIO1 HIGH → hay un evento de RX.
+      // NO llamamos handleLoRa() desde aquí para evitar confusión de estado
+      // de RadioLib (el objeto radio está en modo RX activo, no en STDBY).
+      // En cambio, simplemente salimos del bloque de sleep y dejamos que
+      // el handleLoRa() normal al inicio del SIGUIENTE loop() lo procese.
+      // DIO1 permanece HIGH (IRQs no limpiados) hasta que handleLoRa() llame
+      // a radio.readData() que los limpia internamente.
+      Serial.println("[CAD] Evento RX detectado. Dejando procesar al loop principal.");
+      resetActiveTimeout();  // Asegurar que no volvemos a dormir inmediatamente
+
+    } else {
+      // ── FASE 4B: Canal libre → volver a dormir ───────────────────────────
+      Serial.println("[CAD] Canal libre. Sleep.");
+      radio.sleep();
+    }
+  }
 }

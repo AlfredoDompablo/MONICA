@@ -14,6 +14,35 @@
 #define LORA_TCXO_VOLTAGE   1.6    // Voltaje TCXO
 #define LORA_USE_REGULATOR  false  // false = usa DC-DC (más eficiente), true = usa LDO
 
+// --- CONFIGURACIÓN DE BAJO CONSUMO (CAD & Sleep) ---
+// CAD_SLEEP_MS: Tiempo que el nodo sensor duerme entre escaneos CAD.
+#define CAD_SLEEP_MS            2500
+
+// CAD_PREAMBLE_MS: Duración mínima del preámbulo largo para despertar nodos.
+// DEBE ser > CAD_SLEEP_MS + latencia de arranque TCXO (~50ms) + tiempo CAD (~3ms) + margen (250ms).
+// Con CAD_SLEEP_MS=2500: 2500 + 50 + 3 + 250 = 2803ms → redondeamos a 2850ms.
+#define CAD_PREAMBLE_MS         2850
+
+// CAD_PREAMBLE_SYMBOLS: Número de símbolos del preámbulo largo, pre-calculado en tiempo de
+// compilación para evitar errores de aritmética flotante en tiempo de ejecución.
+// Fórmula: symbols = CAD_PREAMBLE_MS / symbol_time_ms
+//          symbol_time_ms = (2^LORA_SF) / LORA_BANDWIDTH  →  2^7 / 500.0 = 0.256ms
+//          symbols = 2850 / 0.256 = 11132 (redondeado hacia arriba para seguridad)
+// Verificación: 11132 síms × 0.256ms/sím = 2849.8ms  ✓  Cubre el ciclo de sleep completo.
+// Límite SX1262: máx 65535 símbolos.  11132 << 65535  ✓
+#define CAD_PREAMBLE_SYMBOLS    ((uint16_t)11200)
+
+// CAD_RX_TIMEOUT_MS: Tiempo máximo de espera de paquete después de que CAD detecta señal.
+// CRÍTICO: debe cubrir el peor caso: el nodo despierta justo cuando el concentrador
+// EMPIEZA a transmitir el preámbulo largo. En ese caso el nodo debe esperar casi todo
+// el preámbulo completo (2849ms) + header + payload antes de recibir RX_DONE.
+// Cálculo: CAD_PREAMBLE_MS + margen = 2850 + 650 = 3500ms.
+// Pasos RTC: 3500ms × 64 = 224,000 = 0x036B00 (3 bytes big-endian).
+#define CAD_RX_TIMEOUT_MS       3500
+
+// IDLE_TIMEOUT_MS: Tiempo de inactividad antes de entrar en modo sleep (3 minutos).
+#define IDLE_TIMEOUT_MS         180000
+
 #pragma pack(push, 1)
 
 // Tipos de Mensajes
@@ -25,11 +54,14 @@ enum PacketType : uint8_t {
     CMD_REQ_MISSING   = 0x13, // Concentrador -> Nodo (Petición de fragmentos perdidos)
     CMD_CONFIG_CAM    = 0x14, // Concentrador -> Nodo (Configuración de la cámara)
     CMD_GET_CAM_CONFIG = 0x15, // Concentrador -> Nodo (Obtener configuración de la cámara)
+    CMD_GO_TO_SLEEP    = 0x16, // Concentrador -> Nodo (Comando de apagado en cascada)
+    CMD_WAKEUP         = 0x17, // Concentrador -> Nodo (Comando de despertar secuencial)
     
     // Respuestas (Nodo -> Concentrador)
     ACK               = 0x20,
     NACK              = 0x21,
     ACK_PROCESSING    = 0x22, // Nodo -> Concentrador (Capturando y procesando imagen de cámara)
+    ACK_WAKEUP        = 0x23, // Nodo -> Concentrador (Confirmación de despertar)
     DATA_TELEMETRY    = 0x30,
     DATA_IMG_START    = 0x31,
     DATA_IMG_CHUNK    = 0x32,
