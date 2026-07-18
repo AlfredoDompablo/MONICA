@@ -10,35 +10,29 @@
 #define LORA_CR             5      // Coding Rate (5 significa 4/5 para menor Time-on-Air)
 #define LORA_SYNC_WORD      0x12   // Sync Word para filtrar redes ajenas
 #define LORA_POWER          10     // Potencia en dBm (hasta 22 dBm)
-#define LORA_PREAMBLE_LEN   8      // Longitud de preámbulo
+#define LORA_PREAMBLE_LEN   12      // Longitud de preámbulo (12 símbolos, óptimo para 500kHz según calculadora de Semtech)
 #define LORA_TCXO_VOLTAGE   1.6    // Voltaje TCXO
-#define LORA_USE_REGULATOR  false  // false = usa DC-DC (más eficiente), true = usa LDO
+#define LORA_USE_REGULATOR  true  // false = usa DC-DC, true = usa LDO (más estable y libre de ruido analógico)
 
 // --- CONFIGURACIÓN DE BAJO CONSUMO (CAD & Sleep) ---
 // CAD_SLEEP_MS: Tiempo que el nodo sensor duerme entre escaneos CAD.
-#define CAD_SLEEP_MS            2500
+// Reducido a 1500ms para acelerar el ciclo y mejorar la robustez.
+#define CAD_SLEEP_MS            1500
 
 // CAD_PREAMBLE_MS: Duración mínima del preámbulo largo para despertar nodos.
-// DEBE ser > CAD_SLEEP_MS + latencia de arranque TCXO (~50ms) + tiempo CAD (~3ms) + margen (250ms).
-// Con CAD_SLEEP_MS=2500: 2500 + 50 + 3 + 250 = 2803ms → redondeamos a 2850ms.
-#define CAD_PREAMBLE_MS         2850
+#define CAD_PREAMBLE_MS         1900
 
-// CAD_PREAMBLE_SYMBOLS: Número de símbolos del preámbulo largo, pre-calculado en tiempo de
-// compilación para evitar errores de aritmética flotante en tiempo de ejecución.
+// CAD_PREAMBLE_SYMBOLS: Número de símbolos del preámbulo largo.
 // Fórmula: symbols = CAD_PREAMBLE_MS / symbol_time_ms
-//          symbol_time_ms = (2^LORA_SF) / LORA_BANDWIDTH  →  2^7 / 500.0 = 0.256ms
-//          symbols = 2850 / 0.256 = 11132 (redondeado hacia arriba para seguridad)
-// Verificación: 11132 síms × 0.256ms/sím = 2849.8ms  ✓  Cubre el ciclo de sleep completo.
-// Límite SX1262: máx 65535 símbolos.  11132 << 65535  ✓
-#define CAD_PREAMBLE_SYMBOLS    ((uint16_t)11200)
+//          symbol_time_ms = 0.256ms (para SF7/BW500)
+//          symbols = 1900 / 0.256 = 7421 -> redondeamos a 7500 para seguridad.
+// Verificación: 7500 síms × 0.256ms = 1920ms.
+// Margen de solapamiento garantizado: 1920ms - 1500ms = 420ms (suficiente para derivas).
+#define CAD_PREAMBLE_SYMBOLS    ((uint16_t)7500)
 
-// CAD_RX_TIMEOUT_MS: Tiempo máximo de espera de paquete después de que CAD detecta señal.
-// CRÍTICO: debe cubrir el peor caso: el nodo despierta justo cuando el concentrador
-// EMPIEZA a transmitir el preámbulo largo. En ese caso el nodo debe esperar casi todo
-// el preámbulo completo (2849ms) + header + payload antes de recibir RX_DONE.
-// Cálculo: CAD_PREAMBLE_MS + margen = 2850 + 650 = 3500ms.
-// Pasos RTC: 3500ms × 64 = 224,000 = 0x036B00 (3 bytes big-endian).
-#define CAD_RX_TIMEOUT_MS       3500
+// CAD_RX_TIMEOUT_MS: Tiempo máximo de espera de paquete después de detectar señal.
+// 1920ms (preámbulo completo) + 480ms (margen para payload) = 2400ms.
+#define CAD_RX_TIMEOUT_MS       2400
 
 // IDLE_TIMEOUT_MS: Tiempo de inactividad antes de entrar en modo sleep (3 minutos).
 #define IDLE_TIMEOUT_MS         180000
@@ -62,6 +56,7 @@ enum PacketType : uint8_t {
     NACK              = 0x21,
     ACK_PROCESSING    = 0x22, // Nodo -> Concentrador (Capturando y procesando imagen de cámara)
     ACK_WAKEUP        = 0x23, // Nodo -> Concentrador (Confirmación de despertar)
+    ACK_WAKEUP_HOP    = 0x24, // Nodo -> Nodo (Confirmación de despertar de salto físico)
     DATA_TELEMETRY    = 0x30,
     DATA_IMG_START    = 0x31,
     DATA_IMG_CHUNK    = 0x32,

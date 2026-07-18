@@ -102,6 +102,11 @@ TFT_eSPI tft = TFT_eSPI();    ///< Controlador de visualización de la pantalla 
  */
 SPIClass* spiSD = nullptr; 
 
+class SX1262Access : public SX1262 {
+public:
+  using SX126x::getMod;
+};
+
 /// Transceptor LoRa SX1262 asociado al bus SPI FSPI predeterminado
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
@@ -127,7 +132,16 @@ int transmitLoRa(uint8_t* buffer, size_t size) {
     // Cubre un ciclo completo de CAD_SLEEP_MS (2500ms) + margen de latencia.
     radio.setPreambleLength(CAD_PREAMBLE_SYMBOLS);  // Actualiza caché interno RadioLib
   }
-  // Si no requiere preámbulo largo, el caché ya tiene LORA_PREAMBLE_LEN.
+  
+  // Workaround para calidad de modulación en BW=500kHz según datasheet sección 15.1:
+  // Bit 2 del registro 0x0889 debe ser 0 para transmisiones de 500kHz.
+  Module* mod = ((SX1262Access*)&radio)->getMod();
+  uint8_t cmd[2] = { 0x08, 0x89 };
+  uint8_t val = 0;
+  mod->SPIreadStream(0x1D, cmd, 2, &val, 1);
+  val &= 0xFB; // Poner a 0 el bit 2 (11111011_2)
+  uint8_t gainData[3] = { 0x08, 0x89, val };
+  mod->SPIwriteStream(0x0D, gainData, 3);
 
   int state = radio.transmit(buffer, size);  // Usa el caché interno para setPacketParams()
 
@@ -189,18 +203,62 @@ bool wakeupRoute(uint8_t targetNode) {
   packet.header.seqNum = packetSequence++;
   packet.header.ttl = 5;
   
+  // 1. Despertar al primer salto (Nodo 1) con reintentos salto-a-salto
+  bool hopSuccess = false;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    Serial.printf("[WAKEUP] Transmitiendo intento %d para Nodo 1...\n", attempt);
+    radio.standby();
+    delay(20);
+    transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
+    
+    // Esperar confirmación del primer salto (ACK_WAKEUP_HOP)
+    radio.startReceive();
+    unsigned long hopStart = millis();
+    while (millis() - hopStart < 400) {
+      if (digitalRead(LORA_DIO1) == HIGH) {
+        LoRaPacket hopAckRx;
+        int state = radio.readData((uint8_t*)&hopAckRx, sizeof(LoRaPacket));
+        if (state == RADIOLIB_ERR_NONE) {
+          size_t ackLen = radio.getPacketLength();
+          if (ackLen >= sizeof(LoRaHeader)) {
+            if (hopAckRx.header.syncWord[0] == LORA_SYNC_0 &&
+                hopAckRx.header.syncWord[1] == LORA_SYNC_1 &&
+                hopAckRx.header.type == ACK_WAKEUP_HOP &&
+                hopAckRx.header.srcId == 1 &&
+                hopAckRx.header.seqNum == packet.header.seqNum) {
+              hopSuccess = true;
+              break;
+            }
+          }
+        }
+        radio.startReceive(); // Re-armar RX
+      }
+      delayMicroseconds(200);
+    }
+
+    if (hopSuccess) {
+      Serial.printf("[WAKEUP] Nodo 1 confirmo despertar en intento %d! Continuando cadena...\n", attempt);
+      break;
+    } else {
+      Serial.printf("[WAKEUP WARNING] Sin confirmacion del Nodo 1 en intento %d.\n", attempt);
+      delay(50);
+    }
+  }
+
+  if (!hopSuccess) {
+    Serial.println("[WAKEUP] ERROR: El Nodo 1 no respondio al despertar tras 3 intentos. Abortando.");
+    setScreenStatus("WAKEUP FAIL", "Nodo 1 no responde", "Fallo");
+    return false;
+  }
+
+  // 2. Primer salto despierto con éxito. Ahora esperar el ACK final del destino (end-to-end ACK)
   wakeupAckReceived = false;
   wakeupAckSrc = 0;
-  
-  radio.standby();
-  delay(50);
-  transmitLoRa((uint8_t*)&packet, sizeof(LoRaHeader));
-  radio.startReceive();
+  radio.startReceive(); // Re-armar RX para el ACK final de extremo a extremo
   
   unsigned long waitStart = millis();
-  // Cada salto adicional hacia el objetivo agrega una transmisión de preámbulo largo (8s de margen por salto)
-  // más el tiempo de propagación del ACK de retorno (cortos) y procesamiento.
-  unsigned long timeoutVal = (targetNode - 1) * 8000 + 5000;
+  // Cada salto adicional hacia el objetivo agrega una transmisión de preámbulo largo (6s de margen por salto)
+  unsigned long timeoutVal = (targetNode - 1) * 6000 + 4000;
   while (millis() - waitStart < timeoutVal) {
     smartDelay(10);
     handleLoRa();
@@ -570,6 +628,7 @@ void setScreenStatus(String status, String activity, String progress = "") {
  * @brief Configuración del sistema de hardware y enlace inalámbrico.
  */
 void setup() {
+  // Inicialización de la consola serie para depuración local
   Serial.begin(115200);
   
   // Encendido físico de periféricos
@@ -578,15 +637,14 @@ void setup() {
   pinMode(BACKLIGHT_PIN, OUTPUT);
   digitalWrite(BACKLIGHT_PIN, HIGH);
   delay(100);
-
+  
   // Inicializar pantalla TFT
   tft.init();
   tft.setRotation(3);
+  tft.fillScreen(TFT_BLACK);
+  
   drawBootScreen("Iniciando hardware...", 10);
-
-  // Inicializar receptor GPS (Deshabilitado: Concentrador no envía datos propios)
-  // Serial1.begin(115200, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
-
+  
   // Iniciar bus SPI dedicado y transceptor LoRa
   drawBootScreen("Iniciando LoRa...", 25);
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
@@ -604,6 +662,17 @@ void setup() {
     LORA_USE_REGULATOR
   );
   if (state == RADIOLIB_ERR_NONE) {
+    // Obtener acceso al modulo SPI usando la clase helper SX1262Access
+    Module* mod = ((SX1262Access*)&radio)->getMod();
+
+    // Calibrar imagen analógica de RF (902-928 MHz) para corregir deriva del TCXO
+    uint8_t calData[2] = { 0xE1, 0xE9 };
+    mod->SPIwriteStream(0x98, calData, 2);
+    
+    // Habilitar RX Boosted Gain (máxima sensibilidad en el concentrador)
+    uint8_t gainData[3] = { 0x08, 0xAC, 0x96 };
+    mod->SPIwriteStream(0x0D, gainData, 3);
+
     Serial.println("LoRa SX1262: INICIALIZADO CON EXITO [OK]");
     drawBootScreen("LoRa OK", 45, TFT_GREEN);
   } else {

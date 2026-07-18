@@ -55,24 +55,25 @@ uint8_t cam_colorbar = 0;
 // --- Identificador Único de este Nodo Sensor ---
 // Modificar este valor de 1 a 4 según la posición física del nodo en la
 // topología lineal.
-#define MY_NODE_ID 4
-
+#ifdef NODE_ID_VAL
+#define MY_NODE_ID NODE_ID_VAL
+#else
+#define MY_NODE_ID 2
+#endif
 // --- Configuración de bajo consumo (CAD & Sleep) ---
-#define ENABLE_SLEEP true // Todos los nodos sensores entran en modo de suspensión
-unsigned long lastActiveTime = 0;       // Marca de tiempo de la última actividad
-unsigned long lastCadDetectTime = 0;     // Marca de tiempo del último evento CAD detectado
+#define ENABLE_SLEEP                                                           \
+  true // Todos los nodos sensores entran en modo de suspensión
+unsigned long lastActiveTime = 0; // Marca de tiempo de la última actividad
+unsigned long lastCadDetectTime =
+    0; // Marca de tiempo del último evento CAD detectado
 
-void resetActiveTimeout() {
-  lastActiveTime = millis();
-}
+void resetActiveTimeout() { lastActiveTime = millis(); }
 
-// Los nodos sensores siempre asumen que otros nodos sensores pueden estar dormidos.
-// Esto asegura que el relay de CMD_WAKEUP use preámbulo largo.
-bool isNodeSleeping(uint8_t nodeId) {
-  return (nodeId >= 1 && nodeId <= 4);
-}
+// Los nodos sensores siempre asumen que otros nodos sensores pueden estar
+// dormidos. Esto asegura que el relay de CMD_WAKEUP use preámbulo largo.
+bool isNodeSleeping(uint8_t nodeId) { return (nodeId >= 1 && nodeId <= 4); }
 // --- Definición de Pines de Hardware (Heltec Wireless Tracker v1.1) ---
-#if MY_NODE_ID == 2
+#if MY_NODE_ID == 6
 #define VEXT_PIN 37 // Control de energía para V1.0 (Nodo 2)
 #else
 #define VEXT_PIN 3 // Control de energía para V1.1 (Nodo 1 y Concentrador)
@@ -99,7 +100,7 @@ bool isNodeSleeping(uint8_t nodeId) {
 // ser el tiempo de gracia (pacing) para dar margen a que los nodos repetidores
 // retransmitan el paquete anterior en la línea sin colisionar.
 #if MY_NODE_ID == 1
-#define DELAY_TX 40  // 1 salto al concentrador directo: delay corto optimizado.
+#define DELAY_TX 40 // 1 salto al concentrador directo: delay corto optimizado.
 #elif MY_NODE_ID == 2
 #define DELAY_TX 150 // 2 saltos al concentrador: delay medio optimizado.
 #elif MY_NODE_ID == 3
@@ -122,17 +123,44 @@ TFT_eSPI tft =
 
 class SX1262Public : public SX1262 {
 public:
-  SX1262Public(Module* mod) : SX1262(mod) {}
+  SX1262Public(Module *mod) : SX1262(mod) {}
   using SX126x::clearIrqStatus;
   using SX126x::getIrqStatus;
 
+  int16_t customCalibrateImage(uint8_t freq1, uint8_t freq2) {
+    uint8_t data[2] = {freq1, freq2};
+    // Opcode 0x98 para CalibrateImage
+    return (getMod()->SPIwriteStream(0x98, data, 2));
+  }
+
+  int16_t customWriteRegister(uint16_t address, uint8_t value) {
+    uint8_t data[3];
+    data[0] = (address >> 8) & 0xFF;
+    data[1] = address & 0xFF;
+    data[2] = value;
+    // Opcode 0x0D para WriteRegister
+    return (getMod()->SPIwriteStream(0x0D, data, 3));
+  }
+
+  uint8_t customReadRegister(uint16_t address) {
+    uint8_t cmd[2];
+    cmd[0] = (address >> 8) & 0xFF;
+    cmd[1] = address & 0xFF;
+    uint8_t val = 0;
+    // Opcode 0x1D para ReadRegister (dirección 2 bytes + 1 status/NOP y lee 1
+    // byte)
+    getMod()->SPIreadStream(0x1D, cmd, 2, &val, 1);
+    return val;
+  }
+
   int16_t customStartChannelScan() {
-    if(getPacketType() != RADIOLIB_SX126X_PACKET_TYPE_LORA) {
-      return(RADIOLIB_ERR_WRONG_MODEM);
+    if (getPacketType() != RADIOLIB_SX126X_PACKET_TYPE_LORA) {
+      return (RADIOLIB_ERR_WRONG_MODEM);
     }
 
     int16_t state = standby();
-    if(state != RADIOLIB_ERR_NONE) return state;
+    if (state != RADIOLIB_ERR_NONE)
+      return state;
 
     getMod()->setRfSwitchState(Module::MODE_RX);
 
@@ -141,22 +169,27 @@ public:
     // Con CAD_ONLY, el chip siempre vuelve a STDBY_RC al terminar el CAD,
     // así que solo necesitamos saber si detectó señal o no.
     state = setDioIrqParams(
-      RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE,
-      RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE);
-    if(state != RADIOLIB_ERR_NONE) return state;
+        RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE,
+        RADIOLIB_SX126X_IRQ_CAD_DETECTED | RADIOLIB_SX126X_IRQ_CAD_DONE);
+    if (state != RADIOLIB_ERR_NONE)
+      return state;
 
     // Limpiar todos los IRQs antes de armar el CAD para asegurar estado limpio.
     state = clearIrqStatus();
-    if(state != RADIOLIB_ERR_NONE) return state;
+    if (state != RADIOLIB_ERR_NONE)
+      return state;
 
-    // Parámetros de CAD (SetCadParams, opcode 0x88) según datasheet Tabla 13-71:
+    // Parámetros de CAD (SetCadParams, opcode 0x88) según datasheet Tabla
+    // 13-71:
     //
     // data[0] cadSymbolNum : CAD_ON_4_SYMB (0x02) = 4 símbolos
-    //         En SF7/BW500: tiempo CAD = 4 × 0.256ms = 1.024ms + ~0.5 símbolo post-proceso.
-    //         Suficiente para detectar preámbulo LoRa con buena fiabilidad.
+    //         En SF7/BW500: tiempo CAD = 4 × 0.256ms = 1.024ms + ~0.5 símbolo
+    //         post-proceso. Suficiente para detectar preámbulo LoRa con buena
+    //         fiabilidad.
     //
     // data[1] cadDetPeak   : SF + 13 = 7 + 13 = 20
-    //         Umbral de detección de pico. Fórmula recomendada en AN1200.48 de Semtech.
+    //         Umbral de detección de pico. Fórmula recomendada en AN1200.48 de
+    //         Semtech.
     //
     // data[2] cadDetMin    : 10
     //         Umbral mínimo de detección. Filtra ruido de fondo.
@@ -172,33 +205,44 @@ public:
     //
     // data[4-6] cadTimeout : 0x000000 (sin timeout, no aplica en CAD_ONLY)
     uint8_t data[7];
-    data[0] = RADIOLIB_SX126X_CAD_ON_4_SYMB;  // 4 símbolos
-    data[1] = LORA_SF + 13;                    // = 20 para SF7
+    data[0] = RADIOLIB_SX126X_CAD_ON_2_SYMB; // 2 símbolos (óptimo según
+                                             // fabricante para SF7)
+    data[1] = 18; // cadDetPeak = 18 (umbral más sensible para capturar señales
+                  // atenuadas o desviadas)
     data[2] = 10;
-    data[3] = 0x00;                            // CAD_ONLY: vuelve a STDBY_RC siempre
+    data[3] = 0x00; // CAD_ONLY: vuelve a STDBY_RC siempre
     data[4] = 0x00;
     data[5] = 0x00;
     data[6] = 0x00;
 
-    state = getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD_PARAMS, data, 7);
-    if(state != RADIOLIB_ERR_NONE) return state;
+    state =
+        getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD_PARAMS, data, 7);
+    if (state != RADIOLIB_ERR_NONE)
+      return state;
 
-    return(getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD, NULL, 0));
+    return (getMod()->SPIwriteStream(RADIOLIB_SX126X_CMD_SET_CAD, NULL, 0));
   }
 };
 
-SX1262Public radio = new Module(LORA_CS, LORA_DIO1, LORA_RST,
-                                LORA_BUSY); // Controlador LoRa SX1262 vía RadioLib.
+// --- RASTREO DE COMANDOS PROCESADOS PARA EVITAR RETRANSMISIONES DUPLICADAS ---
+uint8_t lastProcessedSrcId = 0;
+uint16_t lastProcessedSeqNum = 0xFFFF;
+bool hasLastProcessed = false;
+
+SX1262Public radio =
+    new Module(LORA_CS, LORA_DIO1, LORA_RST,
+               LORA_BUSY); // Controlador LoRa SX1262 vía RadioLib.
 HardwareSerial camSerial(
     2); // Interfaz UART secundaria (Serial2) para transferencias de cámara.
 
-int transmitLoRa(uint8_t* buffer, size_t size) {
-  LoRaPacket* packet = (LoRaPacket*)buffer;
+int transmitLoRa(uint8_t *buffer, size_t size) {
+  LoRaPacket *packet = (LoRaPacket *)buffer;
   uint8_t nextHop = packet->header.nextHopId;
-  uint8_t type    = packet->header.type;
+  uint8_t type = packet->header.type;
 
-  // Determinar si se requiere preámbulo largo para despertar nodos en CAD/sleep.
-  // Los nodos sensores (ID 1-4) siempre pueden estar en ciclo CAD/Sleep.
+  // Determinar si se requiere preámbulo largo para despertar nodos en
+  // CAD/sleep. Los nodos sensores (ID 1-4) siempre pueden estar en ciclo
+  // CAD/Sleep.
   bool requireLongPreamble = (type == CMD_WAKEUP && isNodeSleeping(nextHop));
 
   // SOLUCIÓN AL BUG DE PREÁMBULO:
@@ -212,19 +256,29 @@ int transmitLoRa(uint8_t* buffer, size_t size) {
   // Esto funciona porque el caché interno y el registro del chip se sincronizan
   // en el mismo setPacketParams() que transmit() llama internamente.
   if (requireLongPreamble) {
-    radio.setPreambleLength(CAD_PREAMBLE_SYMBOLS);  // Actualiza caché interno RadioLib
+    radio.setPreambleLength(
+        CAD_PREAMBLE_SYMBOLS); // Actualiza caché interno RadioLib
   }
-  // Si no requiere preámbulo largo, el caché ya tiene LORA_PREAMBLE_LEN (valor normal).
+  // Si no requiere preámbulo largo, el caché ya tiene LORA_PREAMBLE_LEN (valor
+  // normal).
 
-  int state = radio.transmit(buffer, size);  // Usa el caché interno para setPacketParams()
+  // Workaround para calidad de modulación en BW=500kHz según datasheet
+  // sección 15.1: Bit 2 del registro 0x0889 debe ser 0 para transmisiones de
+  // 500kHz.
+  uint8_t val = radio.customReadRegister(0x0889);
+  val &= 0xFB; // Poner a 0 el bit 2 (11111011_2)
+  radio.customWriteRegister(0x0889, val);
 
-  // Restaurar siempre el preámbulo normal en el caché RadioLib para RX y TX futuros.
+  int state = radio.transmit(
+      buffer, size); // Usa el caché interno para setPacketParams()
+
+  // Restaurar siempre el preámbulo normal en el caché RadioLib para RX y TX
+  // futuros.
   radio.setPreambleLength(LORA_PREAMBLE_LEN);
 
   resetActiveTimeout();
   return state;
 }
-
 
 // --- Variables de Estado Global ---
 uint16_t packetSequence =
@@ -299,8 +353,10 @@ bool isRelayScreenActive = false; // Bandera para indicar que la pantalla de
                                   // retransmisión está visible.
 
 // --- Variables de Control No-Bloqueante para Pantalla Temporal (TX/RX) ---
-unsigned long lastTemporaryScreenTime = 0; // Registra cuándo se mostró la pantalla temporal.
-bool isTemporaryScreenActive = false;      // Bandera para indicar que la pantalla temporal está visible.
+unsigned long lastTemporaryScreenTime =
+    0; // Registra cuándo se mostró la pantalla temporal.
+bool isTemporaryScreenActive =
+    false; // Bandera para indicar que la pantalla temporal está visible.
 
 // Icono de Satélite de 8x8 píxeles
 const uint8_t satellite_icon[] PROGMEM = {0x00, 0x60, 0x68, 0x1c,
@@ -523,6 +579,9 @@ void setup() {
                           LORA_TCXO_VOLTAGE, LORA_USE_REGULATOR);
 
   if (state == RADIOLIB_ERR_NONE) {
+    radio.customCalibrateImage(0xE1, 0xE9);
+    radio.customWriteRegister(
+        0x08AC, 0x96); // Habilitar RX Boosted Gain (máxima sensibilidad)
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.println("LoRa OK!");
     Serial.println("LoRa SX1262: INICIALIZADO CON EXITO [OK]");
@@ -580,7 +639,8 @@ void sendSensorTelemetry(uint8_t destId) {
   uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
 
   // Actualizar pantalla con el diseño unificado
-  setScreenStatus("ENVIANDO TELEM", "Dest: Conc (" + String(destId) + ")", "Pacing: " + String(DELAY_TX) + " ms");
+  setScreenStatus("ENVIANDO TELEM", "Dest: Conc (" + String(destId) + ")",
+                  "Pacing: " + String(DELAY_TX) + " ms");
 
   // Transmitir paquete por LoRa
   int state = transmitLoRa((uint8_t *)&packet, packetSize);
@@ -590,7 +650,8 @@ void sendSensorTelemetry(uint8_t destId) {
     Serial.println("Telemetria enviada con exito");
     strcpy(lastRfActivity, "TX Telem OK");
   } else {
-    setScreenStatus("TELEMETRIA ERR", "Fallo al enviar", "Error: " + String(state));
+    setScreenStatus("TELEMETRIA ERR", "Fallo al enviar",
+                    "Error: " + String(state));
     sprintf(lastRfActivity, "TX Telem ERR %d", state);
   }
 
@@ -694,7 +755,8 @@ void requestAndSendImage(uint8_t destId) {
   while (camSerial.available())
     camSerial.read(); // Limpiar remanentes serie
 
-  // Solicitar disparo de foto directamente (la camara recuerda su ultima configuracion en NVS)
+  // Solicitar disparo de foto directamente (la camara recuerda su ultima
+  // configuracion en NVS)
   Serial.println("[CAMERA DEBUG] Enviando TAKE_PIC a la camara...");
   camSerial.println("TAKE_PIC");
 
@@ -725,7 +787,7 @@ void requestAndSendImage(uint8_t destId) {
     Serial.printf("[CAMERA DEBUG] ERROR: Peticion de imagen fallida o tamano "
                   "excede el limite. imgIncoming=%d, imgSize=%u\n",
                   imgIncoming, imgSize);
-                  
+
     // Enviar NACK de error de cámara al concentrador
     LoRaPacket nackPacket;
     memset(&nackPacket, 0, sizeof(LoRaHeader));
@@ -733,18 +795,19 @@ void requestAndSendImage(uint8_t destId) {
     nackPacket.header.syncWord[1] = LORA_SYNC_1;
     nackPacket.header.srcId = MY_NODE_ID;
     nackPacket.header.destId = destId;
-    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.nextHopId =
+        (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
     nackPacket.header.type = NACK;
     nackPacket.header.seqNum = packetSequence++;
     nackPacket.header.ttl = 5;
-    
+
     if (!imgIncoming) {
       strcpy((char *)nackPacket.payload, "CAM_INIT_ERR");
     } else {
       strcpy((char *)nackPacket.payload, "CAM_SIZE_ERR");
     }
     transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
-    
+
     setScreenStatus("ERROR CAMARA", "Tamanio invalido", "Apagando camara");
     digitalWrite(CAM_EN, LOW); // Apagar cámara ante error
     delay(1500);
@@ -762,7 +825,7 @@ void requestAndSendImage(uint8_t destId) {
   if (!imgFile) {
     Serial.println(
         "[CAMERA DEBUG] ERROR: No se pudo abrir /temp_img.jpg en LittleFS!");
-        
+
     // Enviar NACK de error de almacenamiento al concentrador
     LoRaPacket nackPacket;
     memset(&nackPacket, 0, sizeof(LoRaHeader));
@@ -770,14 +833,15 @@ void requestAndSendImage(uint8_t destId) {
     nackPacket.header.syncWord[1] = LORA_SYNC_1;
     nackPacket.header.srcId = MY_NODE_ID;
     nackPacket.header.destId = destId;
-    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.nextHopId =
+        (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
     nackPacket.header.type = NACK;
     nackPacket.header.seqNum = packetSequence++;
     nackPacket.header.ttl = 5;
-    
+
     strcpy((char *)nackPacket.payload, "FS_WRITE_ERR");
     transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
-    
+
     setScreenStatus("ERROR FLASH", "Err Inicializar", "Apagando camara");
     digitalWrite(CAM_EN, LOW);
     radio.startReceive();
@@ -820,7 +884,7 @@ void requestAndSendImage(uint8_t destId) {
   if (!downloadSuccess) {
     Serial.println("[CAMERA DEBUG] ERROR: Descarga incompleta, eliminando "
                    "archivo temporal.");
-                   
+
     // Enviar NACK al concentrador
     LoRaPacket nackPacket;
     memset(&nackPacket, 0, sizeof(LoRaHeader));
@@ -828,14 +892,15 @@ void requestAndSendImage(uint8_t destId) {
     nackPacket.header.syncWord[1] = LORA_SYNC_1;
     nackPacket.header.srcId = MY_NODE_ID;
     nackPacket.header.destId = destId;
-    nackPacket.header.nextHopId = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
+    nackPacket.header.nextHopId =
+        (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
     nackPacket.header.type = NACK;
     nackPacket.header.seqNum = packetSequence++;
     nackPacket.header.ttl = 5;
-    
+
     strcpy((char *)nackPacket.payload, "CAM_READ_ERR");
     transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 13);
-    
+
     setScreenStatus("ERROR CAMARA", "Descarga fallida", "Archivo borrado");
     LittleFS.remove("/temp_img.jpg");
     digitalWrite(CAM_EN, LOW);
@@ -857,7 +922,9 @@ void requestAndSendImage(uint8_t destId) {
   uint8_t nextHop = (destId < MY_NODE_ID) ? (MY_NODE_ID - 1) : (MY_NODE_ID + 1);
 
   // Inicializar interfaz de streaming usando el estilo unificado
-  setScreenStatus("ENVIANDO FOTO", "Size: " + String(imgSize / 1024.0, 1) + " KB", "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
+  setScreenStatus("ENVIANDO FOTO",
+                  "Size: " + String(imgSize / 1024.0, 1) + " KB",
+                  "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
 
   uint16_t totalChunks = (imgSize + LORA_MAX_PAYLOAD - 1) / LORA_MAX_PAYLOAD;
 
@@ -907,7 +974,10 @@ void requestAndSendImage(uint8_t destId) {
     transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + chunkLen);
     bytesSent += chunkLen;
 
-    setScreenStatus("ENVIANDO CHUNKS", "Progreso: " + String(chunkIndex) + "/" + String(totalChunks), "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
+    setScreenStatus("ENVIANDO CHUNKS",
+                    "Progreso: " + String(chunkIndex) + "/" +
+                        String(totalChunks),
+                    "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
 
     // Aplicación estricta de pacing para prevención de colisiones por
     // desbordamiento de búfer repetidor
@@ -950,7 +1020,8 @@ void requestAndSendImage(uint8_t destId) {
         memcpy(packet.payload + 4, &totalChunks, 2);
         transmitLoRa((uint8_t *)&packet, sizeof(LoRaHeader) + 6);
 
-        setScreenStatus("ESPERANDO ACK", "Retransmitiendo END", "Intento END: " + String(endRetryCount + 1));
+        setScreenStatus("ESPERANDO ACK", "Retransmitiendo END",
+                        "Intento END: " + String(endRetryCount + 1));
 
         lastEndTxTime = millis();
         radio.startReceive();
@@ -981,7 +1052,8 @@ void requestAndSendImage(uint8_t destId) {
               // ¡Concentrador recibió todo sin pérdidas!
               Serial.println("LoRa Flow: ¡Concentrador reporta 100% recibido! "
                              "Sesión completada.");
-              setScreenStatus("FOTO CONFIRMADA", "Confirmado [OK]", "Completado");
+              setScreenStatus("FOTO CONFIRMADA", "Confirmado [OK]",
+                              "Completado");
               strcpy(lastRfActivity, "TX Img OK");
               waitingResponse = false;
             } else if (rxPacket.header.type == CMD_REQ_MISSING) {
@@ -999,7 +1071,10 @@ void requestAndSendImage(uint8_t destId) {
               Serial.printf("LoRa Flow: ¡NACK recibido! %u fragmentos "
                             "perdidos. Retransmitiendo...\n",
                             missingCount);
-              setScreenStatus("NACK RECIBIDO", "Reenviando " + String(missingCount) + " chunks", "Ruta: N" + String(MY_NODE_ID) + "->N" + String(nextHop));
+              setScreenStatus("NACK RECIBIDO",
+                              "Reenviando " + String(missingCount) + " chunks",
+                              "Ruta: N" + String(MY_NODE_ID) + "->N" +
+                                  String(nextHop));
 
               packet.header.type = DATA_IMG_CHUNK;
 
@@ -1018,7 +1093,7 @@ void requestAndSendImage(uint8_t destId) {
 
                   packet.header.seqNum = seq;
                   transmitLoRa((uint8_t *)&packet,
-                                 sizeof(LoRaHeader) + chunkLen);
+                               sizeof(LoRaHeader) + chunkLen);
                   Serial.printf("Retransmitiendo chunk %d (Offset %u, len %u) "
                                 "desde Flash local\n",
                                 seq, offset, chunkLen);
@@ -1105,8 +1180,9 @@ void handleLoRa() {
                       rxPacket.header.nextHopId, rxPacket.header.type,
                       rxPacket.header.ttl);
 
-        // Cualquier paquete válido con sync word correcto en el aire mantiene el nodo despierto
-        // para dar tiempo a recibir la retransmisión del siguiente salto.
+        // Cualquier paquete válido con sync word correcto en el aire mantiene
+        // el nodo despierto para dar tiempo a recibir la retransmisión del
+        // siguiente salto.
         lastCadDetectTime = millis();
 
         // Comprobar tiempo de vida del paquete
@@ -1128,7 +1204,8 @@ void handleLoRa() {
           resetActiveTimeout();
 
           // ¿El paquete está dirigido formalmente a mi ID final o es broadcast?
-          if (rxPacket.header.destId == MY_NODE_ID || rxPacket.header.destId == 0xFF) {
+          if (rxPacket.header.destId == MY_NODE_ID ||
+              rxPacket.header.destId == 0xFF) {
             Serial.printf("Comando Recibido: Tipo 0x%02X de Nodo %d\n",
                           rxPacket.header.type, rxPacket.header.srcId);
 
@@ -1137,7 +1214,11 @@ void handleLoRa() {
                                   : (MY_NODE_ID + 1);
 
             // Mostrar comando recibido usando la pantalla unificada
-            setScreenStatus("CMD RECIBIDO", "Tipo: 0x" + String(rxPacket.header.type, HEX) + " de N" + String(rxPacket.header.srcId), "Ruta: N" + String(prevHop) + "->N" + String(MY_NODE_ID));
+            setScreenStatus("CMD RECIBIDO",
+                            "Tipo: 0x" + String(rxPacket.header.type, HEX) +
+                                " de N" + String(rxPacket.header.srcId),
+                            "Ruta: N" + String(prevHop) + "->N" +
+                                String(MY_NODE_ID));
 
             sprintf(lastRfActivity, "RX Cmd 0x%02X de %d", rxPacket.header.type,
                     rxPacket.header.srcId);
@@ -1233,24 +1314,28 @@ void handleLoRa() {
                             cam_resolution, cam_brightness, cam_contrast,
                             cam_quality);
 
-              // Encender la cámara físicamente para guardar su configuración local
-              Serial.println("[CAMERA DEBUG] Encendiendo camara para configuracion remota (CAM_EN = HIGH)...");
+              // Encender la cámara físicamente para guardar su configuración
+              // local
+              Serial.println("[CAMERA DEBUG] Encendiendo camara para "
+                             "configuracion remota (CAM_EN = HIGH)...");
               digitalWrite(CAM_EN, HIGH);
               delay(2000); // Esperar que arranque la camara
 
               // Vaciar buffer RX
-              while (camSerial.available()) camSerial.read();
+              while (camSerial.available())
+                camSerial.read();
 
               // Enviar config por serial
               Serial.println("[CAMERA] Enviando configuracion a la camara...");
-              camSerial.printf("SET_CONFIG %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
-                               "%d %d %d %d %d %d %d %d\n",
-                               cam_resolution, cam_brightness, cam_contrast, cam_quality,
-                               cam_saturation, cam_special_effect, cam_whitebal,
-                               cam_awb_gain, cam_wb_mode, cam_exposure_ctrl, cam_aec2,
-                               cam_ae_level, cam_aec_value, cam_gain_ctrl, cam_agc_gain,
-                               cam_gainceiling, cam_bpc, cam_wpc, cam_raw_gma, cam_lenc,
-                               cam_hmirror, cam_vflip, cam_dcw, cam_colorbar);
+              camSerial.printf(
+                  "SET_CONFIG %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
+                  "%d %d %d %d %d %d %d %d\n",
+                  cam_resolution, cam_brightness, cam_contrast, cam_quality,
+                  cam_saturation, cam_special_effect, cam_whitebal,
+                  cam_awb_gain, cam_wb_mode, cam_exposure_ctrl, cam_aec2,
+                  cam_ae_level, cam_aec_value, cam_gain_ctrl, cam_agc_gain,
+                  cam_gainceiling, cam_bpc, cam_wpc, cam_raw_gma, cam_lenc,
+                  cam_hmirror, cam_vflip, cam_dcw, cam_colorbar);
 
               // Esperar confirmación
               unsigned long configAckStart = millis();
@@ -1266,72 +1351,86 @@ void handleLoRa() {
                 }
                 delay(5);
               }
-              Serial.printf("[CAMERA] Confirmacion de configuracion remota: %s\n", gotConfigAck ? "OK" : "TIMEOUT");
+              Serial.printf(
+                  "[CAMERA] Confirmacion de configuracion remota: %s\n",
+                  gotConfigAck ? "OK" : "TIMEOUT");
 
               // Apagar la camara para ahorrar energia
               digitalWrite(CAM_EN, LOW);
 
-              // Responder con ACK de confirmación si la cámara contestó, o NACK en caso contrario
+              // Responder con ACK de confirmación si la cámara contestó, o NACK
+              // en caso contrario
               if (gotConfigAck) {
                 LoRaPacket ackPacket;
                 ackPacket.header.syncWord[0] = LORA_SYNC_0;
                 ackPacket.header.syncWord[1] = LORA_SYNC_1;
                 ackPacket.header.srcId = MY_NODE_ID;
                 ackPacket.header.destId = rxPacket.header.srcId;
-                ackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
-                                                 ? (MY_NODE_ID - 1)
-                                                 : (MY_NODE_ID + 1);
+                ackPacket.header.nextHopId =
+                    (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1)
+                                                         : (MY_NODE_ID + 1);
                 ackPacket.header.type = ACK;
                 ackPacket.header.seqNum = packetSequence++;
                 ackPacket.header.ttl = 5;
                 transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
                 radio.startReceive();
-                Serial.println("[LORA] Enviado ACK de configuracion exitosa al concentrador.");
+                Serial.println("[LORA] Enviado ACK de configuracion exitosa al "
+                               "concentrador.");
               } else {
                 LoRaPacket nackPacket;
                 nackPacket.header.syncWord[0] = LORA_SYNC_0;
                 nackPacket.header.syncWord[1] = LORA_SYNC_1;
                 nackPacket.header.srcId = MY_NODE_ID;
                 nackPacket.header.destId = rxPacket.header.srcId;
-                nackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
-                                                 ? (MY_NODE_ID - 1)
-                                                 : (MY_NODE_ID + 1);
+                nackPacket.header.nextHopId =
+                    (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1)
+                                                         : (MY_NODE_ID + 1);
                 nackPacket.header.type = NACK;
                 nackPacket.header.seqNum = packetSequence++;
                 nackPacket.header.ttl = 5;
                 strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
                 transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
                 radio.startReceive();
-                Serial.println("[LORA WARNING] Enviado NACK (CAMERA_TIMEOUT) al concentrador.");
+                Serial.println("[LORA WARNING] Enviado NACK (CAMERA_TIMEOUT) "
+                               "al concentrador.");
               }
             } else if (rxPacket.header.type == CMD_GET_CAM_CONFIG) {
               delay(80);
-              Serial.println("[CAMERA DEBUG] Encendiendo camara para lectura de configuracion (CAM_EN = HIGH)...");
+              Serial.println("[CAMERA DEBUG] Encendiendo camara para lectura "
+                             "de configuracion (CAM_EN = HIGH)...");
               digitalWrite(CAM_EN, HIGH);
               delay(2000); // Esperar que arranque la camara
 
               // Vaciar buffer RX
-              while (camSerial.available()) camSerial.read();
+              while (camSerial.available())
+                camSerial.read();
 
               // Enviar peticion por serial
-              Serial.println("[CAMERA] Solicitando configuracion a la camara...");
+              Serial.println(
+                  "[CAMERA] Solicitando configuracion a la camara...");
               camSerial.println("GET_CONFIG");
 
               // Esperar respuesta
               unsigned long configStart = millis();
               bool gotConfig = false;
               int res = 10, br = 0, co = 1, qty = 24;
-              int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0, al = 0, av = 300;
-              int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1, hm = 0, vf = 0, dw = 1, cb = 0;
+              int sa = 0, ef = 0, wb = 1, aw = 1, wm = 0, ec = 1, a2 = 0,
+                  al = 0, av = 300;
+              int gc = 1, ag = 0, gl = 0, bp = 0, wp = 1, rg = 1, lc = 1,
+                  hm = 0, vf = 0, dw = 1, cb = 0;
 
               while (millis() - configStart < 1500) {
                 if (camSerial.available()) {
                   String resp = camSerial.readStringUntil('\n');
                   resp.trim();
                   if (resp.startsWith("CONFIG_RESP")) {
-                    int parsed = sscanf(resp.c_str() + 12,
-                                         "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
-                                         &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm, &ec, &a2, &al, &av, &gc, &ag, &gl, &bp, &wp, &rg, &lc, &hm, &vf, &dw, &cb);
+                    int parsed =
+                        sscanf(resp.c_str() + 12,
+                               "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
+                               "%d %d %d %d %d %d %d %d %d",
+                               &res, &br, &co, &qty, &sa, &ef, &wb, &aw, &wm,
+                               &ec, &a2, &al, &av, &gc, &ag, &gl, &bp, &wp, &rg,
+                               &lc, &hm, &vf, &dw, &cb);
                     if (parsed >= 24) {
                       gotConfig = true;
                       break;
@@ -1340,13 +1439,15 @@ void handleLoRa() {
                 }
                 delay(5);
               }
-              Serial.printf("[CAMERA] Lectura de configuracion remota: %s\n", gotConfig ? "OK" : "TIMEOUT");
+              Serial.printf("[CAMERA] Lectura de configuracion remota: %s\n",
+                            gotConfig ? "OK" : "TIMEOUT");
 
               // Apagar la camara para ahorrar energia
               digitalWrite(CAM_EN, LOW);
 
               if (gotConfig) {
-                // Guardar en Preferences de forma permanente para mantener sincronía
+                // Guardar en Preferences de forma permanente para mantener
+                // sincronía
                 cam_resolution = res;
                 cam_brightness = br;
                 cam_contrast = co;
@@ -1405,14 +1506,15 @@ void handleLoRa() {
                 respPacket.header.syncWord[1] = LORA_SYNC_1;
                 respPacket.header.srcId = MY_NODE_ID;
                 respPacket.header.destId = rxPacket.header.srcId;
-                respPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
-                                                 ? (MY_NODE_ID - 1)
-                                                 : (MY_NODE_ID + 1);
+                respPacket.header.nextHopId =
+                    (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1)
+                                                         : (MY_NODE_ID + 1);
                 respPacket.header.type = DATA_CAM_CONFIG;
                 respPacket.header.seqNum = packetSequence++;
                 respPacket.header.ttl = 5;
 
-                CameraConfigPayload *ccp = (CameraConfigPayload *)respPacket.payload;
+                CameraConfigPayload *ccp =
+                    (CameraConfigPayload *)respPacket.payload;
                 ccp->resolution = res;
                 ccp->brightness = br;
                 ccp->contrast = co;
@@ -1438,25 +1540,28 @@ void handleLoRa() {
                 ccp->dcw = dw;
                 ccp->colorbar = cb;
 
-                transmitLoRa((uint8_t *)&respPacket, sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
+                transmitLoRa((uint8_t *)&respPacket,
+                             sizeof(LoRaHeader) + sizeof(CameraConfigPayload));
                 radio.startReceive();
-                Serial.println("[LORA] Enviada configuracion de camara leida con exito al concentrador.");
+                Serial.println("[LORA] Enviada configuracion de camara leida "
+                               "con exito al concentrador.");
               } else {
                 LoRaPacket nackPacket;
                 nackPacket.header.syncWord[0] = LORA_SYNC_0;
                 nackPacket.header.syncWord[1] = LORA_SYNC_1;
                 nackPacket.header.srcId = MY_NODE_ID;
                 nackPacket.header.destId = rxPacket.header.srcId;
-                nackPacket.header.nextHopId = (rxPacket.header.srcId < MY_NODE_ID)
-                                                 ? (MY_NODE_ID - 1)
-                                                 : (MY_NODE_ID + 1);
+                nackPacket.header.nextHopId =
+                    (rxPacket.header.srcId < MY_NODE_ID) ? (MY_NODE_ID - 1)
+                                                         : (MY_NODE_ID + 1);
                 nackPacket.header.type = NACK;
                 nackPacket.header.seqNum = packetSequence++;
                 nackPacket.header.ttl = 5;
                 strcpy((char *)nackPacket.payload, "CAMERA_TIMEOUT");
                 transmitLoRa((uint8_t *)&nackPacket, sizeof(LoRaHeader) + 15);
                 radio.startReceive();
-                Serial.println("[LORA WARNING] Fallo al leer camara, enviado NACK.");
+                Serial.println(
+                    "[LORA WARNING] Fallo al leer camara, enviado NACK.");
               }
             } else if (rxPacket.header.type == CMD_PING) {
               delay(80);
@@ -1480,16 +1585,62 @@ void handleLoRa() {
                 memcpy(&sleepPacket, &rxPacket, sizeof(LoRaPacket));
                 sleepPacket.header.srcId = MY_NODE_ID;
                 sleepPacket.header.nextHopId = MY_NODE_ID + 1;
-                Serial.printf("[LOWPOWER] Propagando GO_TO_SLEEP al Nodo %d\n", MY_NODE_ID + 1);
-                transmitLoRa((uint8_t*)&sleepPacket, sizeof(LoRaHeader));
+                Serial.printf("[LOWPOWER] Propagando GO_TO_SLEEP al Nodo %d\n",
+                              MY_NODE_ID + 1);
+                transmitLoRa((uint8_t *)&sleepPacket, sizeof(LoRaHeader));
               }
               // Forzar suspensión inmediata: resetear ambos temporizadores
-              // para evitar que el grace period de CAD mantenga el nodo despierto
+              // para evitar que el grace period de CAD mantenga el nodo
+              // despierto
               lastActiveTime = millis() - IDLE_TIMEOUT_MS;
               lastCadDetectTime = 0; // Anular grace period de 35s
               radio.startReceive();
             } else if (rxPacket.header.type == CMD_WAKEUP) {
+              bool isUpstream = (rxPacket.header.srcId > MY_NODE_ID &&
+                                 rxPacket.header.destId < MY_NODE_ID);
+              uint8_t prevHop =
+                  isUpstream ? (MY_NODE_ID + 1) : (MY_NODE_ID - 1);
+
+              bool isDuplicate =
+                  (hasLastProcessed &&
+                   lastProcessedSrcId == rxPacket.header.srcId &&
+                   lastProcessedSeqNum == rxPacket.header.seqNum);
+
+              // Confirmar salto físico anterior (hop-by-hop ACK) en todos los
+              // casos
+              LoRaPacket hopAck;
+              memset(&hopAck, 0, sizeof(LoRaHeader));
+              hopAck.header.syncWord[0] = LORA_SYNC_0;
+              hopAck.header.syncWord[1] = LORA_SYNC_1;
+              hopAck.header.srcId = MY_NODE_ID;
+              hopAck.header.destId = prevHop;
+              hopAck.header.nextHopId = prevHop;
+              hopAck.header.type = ACK_WAKEUP_HOP;
+              hopAck.header.seqNum = rxPacket.header.seqNum;
+              hopAck.header.ttl = 1;
+
+              delay(80); // Margen para el emisor (garantiza que completó su
+                         // conmutación física a RX)
+              transmitLoRa((uint8_t *)&hopAck, sizeof(LoRaHeader));
+              Serial.printf(
+                  "[WAKEUP] Enviado ACK_WAKEUP_HOP de vuelta al Nodo %d\n",
+                  prevHop);
+
+              if (isDuplicate) {
+                Serial.println("[WAKEUP] Detectado wakeup duplicado. Reenviado "
+                               "ACK_WAKEUP_HOP y omitiendo.");
+                radio.startReceive();
+                return;
+              }
+
+              // Registrar comando procesado
+              lastProcessedSrcId = rxPacket.header.srcId;
+              lastProcessedSeqNum = rxPacket.header.seqNum;
+              hasLastProcessed = true;
+
+              // Procesar el destino final del WAKEUP
               Serial.println("[LOWPOWER] Recibido CMD_WAKEUP (Destino final)!");
+
               LoRaPacket ackPacket;
               memset(&ackPacket, 0, sizeof(LoRaHeader));
               ackPacket.header.syncWord[0] = LORA_SYNC_0;
@@ -1502,8 +1653,8 @@ void handleLoRa() {
               ackPacket.header.type = ACK_WAKEUP;
               ackPacket.header.seqNum = packetSequence++;
               ackPacket.header.ttl = 5;
-              
-              delay(80); // Margen de estabilidad
+
+              delay(50); // Margen de estabilidad
               transmitLoRa((uint8_t *)&ackPacket, sizeof(LoRaHeader));
               radio.startReceive();
             }
@@ -1537,23 +1688,147 @@ void handleLoRa() {
               // Solo renderizar el cambio de pantalla si no es una ráfaga de
               // chunks rápidos (evita latencias críticas)
               if (rxPacket.header.type != DATA_IMG_CHUNK) {
-                setScreenStatus("REPETIDOR LORA", "Relay: N" + String(rxPacket.header.srcId) + "->N" + String(rxPacket.header.destId), "Ruta: N" + String(prevHop) + "->N" + String(MY_NODE_ID) + "->N" + String(nextHop));
+                setScreenStatus("REPETIDOR LORA",
+                                "Relay: N" + String(rxPacket.header.srcId) +
+                                    "->N" + String(rxPacket.header.destId),
+                                "Ruta: N" + String(prevHop) + "->N" +
+                                    String(MY_NODE_ID) + "->N" +
+                                    String(nextHop));
               }
 
-              // Modificar la cabecera con el ID del salto físico receptor
-              // directo
-              rxPacket.header.nextHopId = nextHop;
+              if (rxPacket.header.type == CMD_WAKEUP) {
+                bool isDuplicate =
+                    (hasLastProcessed &&
+                     lastProcessedSrcId == rxPacket.header.srcId &&
+                     lastProcessedSeqNum == rxPacket.header.seqNum);
 
-              // Para CMD_WAKEUP en relay, transmitLoRa() aplica automáticamente el
-              // preámbulo largo usando CAD_PREAMBLE_SYMBOLS (constante pre-calculada)
-              // ya que isNodeSleeping() siempre retorna true para IDs 1-4 en nodos sensor.
-              // NO llamar setPreambleLength() aquí para evitar doble configuración.
+                // Confirmar salto físico anterior antes de reenviar en cascada
+                LoRaPacket hopAck;
+                memset(&hopAck, 0, sizeof(LoRaHeader));
+                hopAck.header.syncWord[0] = LORA_SYNC_0;
+                hopAck.header.syncWord[1] = LORA_SYNC_1;
+                hopAck.header.srcId = MY_NODE_ID;
+                hopAck.header.destId = prevHop;
+                hopAck.header.nextHopId = prevHop;
+                hopAck.header.type = ACK_WAKEUP_HOP;
+                hopAck.header.seqNum = rxPacket.header.seqNum;
+                hopAck.header.ttl = 1;
 
-              // Backoff defensivo para des-sincronizar colisiones en el aire
-              delay(40);
+                delay(150); // Margen para el emisor
+                transmitLoRa((uint8_t *)&hopAck, sizeof(LoRaHeader));
+                Serial.printf("[RELAY WAKEUP] Enviado ACK_WAKEUP_HOP de vuelta "
+                              "al Nodo %d\n",
+                              prevHop);
 
-              transmitLoRa((uint8_t *)&rxPacket, packetLen);
-              radio.startReceive(); // Regresar inmediatamente a modo escucha
+                if (isDuplicate) {
+                  Serial.println("[RELAY WAKEUP] Wakeup duplicado recibido en "
+                                 "relay. Omitiendo propagación cascada.");
+                  radio.startReceive();
+                  return;
+                }
+
+                // Registrar comando procesado
+                lastProcessedSrcId = rxPacket.header.srcId;
+                lastProcessedSeqNum = rxPacket.header.seqNum;
+                hasLastProcessed = true;
+
+                // 2. Esperar 500ms en modo RX para verificar si el emisor
+                // retransmite
+                Serial.println("[RELAY WAKEUP] Esperando 500ms de silencio del "
+                               "emisor para evitar colisiones...");
+                radio.standby();
+                radio.startReceive();
+                unsigned long relayWaitStart = millis();
+                while (millis() - relayWaitStart < 500) {
+                  if (digitalRead(LORA_DIO1) == HIGH) {
+                    LoRaPacket dupPacket;
+                    int state = radio.readData((uint8_t *)&dupPacket,
+                                               sizeof(LoRaPacket));
+                    if (state == RADIOLIB_ERR_NONE) {
+                      size_t dupLen = radio.getPacketLength();
+                      if (dupLen >= sizeof(LoRaHeader)) {
+                        if (dupPacket.header.syncWord[0] == LORA_SYNC_0 &&
+                            dupPacket.header.syncWord[1] == LORA_SYNC_1 &&
+                            dupPacket.header.type == CMD_WAKEUP &&
+                            dupPacket.header.srcId == rxPacket.header.srcId &&
+                            dupPacket.header.seqNum == rxPacket.header.seqNum) {
+
+                          Serial.println(
+                              "[RELAY WAKEUP] El emisor retransmio en nuestra "
+                              "ventana. Reenviando ACK_WAKEUP_HOP...");
+                          delay(150); // Margen para el emisor
+                          transmitLoRa((uint8_t *)&hopAck, sizeof(LoRaHeader));
+                          radio.standby();
+                          relayWaitStart = millis(); // Reiniciar espera
+                        }
+                      }
+                    }
+                    radio.standby();
+                    radio.startReceive();
+                  }
+                  delayMicroseconds(200);
+                }
+
+                // 3. Relay de bajada con reintentos salto-a-salto
+                bool hopSuccess = false;
+                for (int attempt = 1; attempt <= 3; attempt++) {
+                  Serial.printf(
+                      "[RELAY WAKEUP] Transmitiendo intento %d para Nodo %d\n",
+                      attempt, nextHop);
+                  // Modificar la cabecera con el ID del salto físico receptor
+                  // directo
+                  rxPacket.header.nextHopId = nextHop;
+                  transmitLoRa((uint8_t *)&rxPacket, packetLen);
+
+                  // Esperar confirmación del receptor del siguiente salto
+                  radio.startReceive();
+                  unsigned long waitStart = millis();
+                  while (millis() - waitStart < 400) {
+                    if (digitalRead(LORA_DIO1) == HIGH) {
+                      LoRaPacket hopAckRx;
+                      int state = radio.readData((uint8_t *)&hopAckRx,
+                                                 sizeof(LoRaPacket));
+                      if (state == RADIOLIB_ERR_NONE) {
+                        size_t ackLen = radio.getPacketLength();
+                        if (ackLen >= sizeof(LoRaHeader)) {
+                          if (hopAckRx.header.syncWord[0] == LORA_SYNC_0 &&
+                              hopAckRx.header.syncWord[1] == LORA_SYNC_1 &&
+                              hopAckRx.header.type == ACK_WAKEUP_HOP &&
+                              hopAckRx.header.srcId == nextHop &&
+                              hopAckRx.header.seqNum ==
+                                  rxPacket.header.seqNum) {
+                            hopSuccess = true;
+                            break;
+                          }
+                        }
+                      }
+                      radio.startReceive(); // Re-armar RX
+                    }
+                    delayMicroseconds(200);
+                  }
+
+                  if (hopSuccess) {
+                    Serial.printf("[RELAY WAKEUP] Nodo %d confirmo despertar "
+                                  "en intento %d!\n",
+                                  nextHop, attempt);
+                    break;
+                  } else {
+                    Serial.printf("[RELAY WAKEUP WARNING] Sin confirmacion del "
+                                  "Nodo %d en intento %d.\n",
+                                  nextHop, attempt);
+                    delay(50); // Pequeña pausa antes de reintentar
+                  }
+                }
+
+                radio.startReceive(); // Dejar la radio en escucha continuo
+              } else {
+                // Relay normal para otros tipos de paquetes (sin reintentos)
+                rxPacket.header.nextHopId = nextHop;
+                delay(40);
+                transmitLoRa((uint8_t *)&rxPacket, packetLen);
+                radio.startReceive(); // Regresar inmediatamente a modo escucha
+              }
+
               Serial.printf("Relay OK: S:%d D:%d\n", rxPacket.header.srcId,
                             rxPacket.header.destId);
 
@@ -1599,7 +1874,8 @@ void loop() {
   // Batería
   if (millis() - lastScreenUpdate > 5000) {
     lastScreenUpdate = millis();
-    if (!isRelayScreenActive && !isTemporaryScreenActive && screenStatus == "ESCUCHANDO") {
+    if (!isRelayScreenActive && !isTemporaryScreenActive &&
+        screenStatus == "ESCUCHANDO") {
       updateTFT();
     }
   }
@@ -1636,21 +1912,27 @@ void loop() {
   // RadioLib sin ninguna carrera de hardware en DIO1.
   // ============================================================================
   bool isGracePeriodActive = (millis() - lastCadDetectTime < 35000);
-  if (ENABLE_SLEEP && (millis() - lastActiveTime > IDLE_TIMEOUT_MS) && !isGracePeriodActive) {
+  if (ENABLE_SLEEP && (millis() - lastActiveTime > IDLE_TIMEOUT_MS) &&
+      !isGracePeriodActive) {
 
     // ── FASE 1: Entrar en Light Sleep ────────────────────────────────────────
     setScreenStatus("DURMIENDO", "Bajo consumo", "");
     delay(30);
     digitalWrite(BACKLIGHT_PIN, LOW);
-    radio.sleep();                                              // Radio → Sleep (~1μA)
+    radio.sleep(); // Radio → Sleep (~1μA)
     esp_sleep_enable_timer_wakeup((uint64_t)CAD_SLEEP_MS * 1000ULL);
-    esp_light_sleep_start();                                   // ← ESP32 duerme aquí
+    esp_light_sleep_start(); // ← ESP32 duerme aquí
 
     // ── FASE 2: Despertar → estabilizar TCXO ─────────────────────────────────
     digitalWrite(BACKLIGHT_PIN, HIGH);
-    delay(10);          // Margen antes del primer acceso SPI
-    radio.standby();    // Radio: Sleep → Standby (activa TCXO)
-    delay(10);          // Esperar estabilización del oscilador
+    delay(10);       // Margen antes del primer acceso SPI
+    radio.standby(); // Radio: Sleep → Standby (activa TCXO)
+    delay(10);       // Esperar estabilización del oscilador
+    radio.customCalibrateImage(
+        0xE1, 0xE9); // Calibrar imagen analógica de RF (902-928 MHz)
+    radio.customWriteRegister(
+        0x08AC, 0x96); // Habilitar RX Boosted Gain (máxima sensibilidad)
+    delay(5);          // Tiempo extra para que la calibración se asiente
 
     // ── FASE 3: CAD_ONLY — escaneo de canal ──────────────────────────────────
     // customStartChannelScan() usa CAD_ONLY (0x00):
@@ -1664,8 +1946,8 @@ void loop() {
       return;
     }
 
-    // Esperar CadDone. Con SF7/BW500 y 4 símbolos: ~1ms + ~0.5 símbolo = ~1.5ms.
-    // Timeout de 30ms es > 20× el tiempo máximo esperado.
+    // Esperar CadDone. Con SF7/BW500 y 4 símbolos: ~1ms + ~0.5 símbolo =
+    // ~1.5ms. Timeout de 30ms es > 20× el tiempo máximo esperado.
     unsigned long cadStart = millis();
     while (digitalRead(LORA_DIO1) == LOW) {
       if (millis() - cadStart > 30UL) {
@@ -1679,45 +1961,50 @@ void loop() {
     // El chip está en STDBY_RC: leer y limpiar IRQs es 100% seguro.
     uint16_t irq = radio.getIrqStatus();
     radio.clearIrqStatus(RADIOLIB_SX126X_IRQ_ALL);
-    Serial.printf("[CAD] IRQ=0x%04X  CadDone=%d  CadDetected=%d\n",
-                  irq,
-                  (irq & RADIOLIB_SX126X_IRQ_CAD_DONE)     ? 1 : 0,
+    Serial.printf("[CAD] IRQ=0x%04X  CadDone=%d  CadDetected=%d\n", irq,
+                  (irq & RADIOLIB_SX126X_IRQ_CAD_DONE) ? 1 : 0,
                   (irq & RADIOLIB_SX126X_IRQ_CAD_DETECTED) ? 1 : 0);
 
     if (irq & RADIOLIB_SX126X_IRQ_CAD_DETECTED) {
       // ── FASE 4A: Señal LoRa detectada → RX manual ────────────────────────
-      // El concentrador está transmitiendo el preámbulo largo (11200 síms = ~2850ms).
-      // Con 4 símbolos de CAD (~1ms), queda ~2849ms de preámbulo + header + payload.
-      // startReceive() de RadioLib configura IRQs correctamente y pone el chip en RX.
-      lastCadDetectTime = millis();
-      Serial.println("[CAD] Señal detectada! Iniciando RX...");
-      setScreenStatus("ESCUCHANDO", "CAD: Señal RF", "Recibiendo...");
-
-      radio.startReceive();  // RadioLib gestiona IRQs, RF switch y estado internamente
+      // Configurar la longitud de preámbulo en el transceptor al valor largo
+      // (7500 símbolos). Si dejamos el valor corto (12), el chip SX1262 físico
+      // dará un timeout interno de hardware y descartará el paquete antes de
+      // recibir el Sync Word porque el preámbulo real es de 1.92s.
+      radio.setPreambleLength(CAD_PREAMBLE_SYMBOLS);
+      radio.startReceive(); // RadioLib configura el chip en RX con el preámbulo
+                            // largo
 
       // Esperar RX_DONE (o error de recepción).
-      // Peor caso: nodo detectó preámbulo al inicio → esperar hasta ~2852ms.
-      // Margen de 648ms sobre CAD_PREAMBLE_MS (3500ms total).
       unsigned long rxStart = millis();
       while (digitalRead(LORA_DIO1) == LOW) {
         if (millis() - rxStart > (unsigned long)CAD_RX_TIMEOUT_MS) {
           Serial.println("[CAD] Timeout esperando paquete. Sleep.");
+          radio.setPreambleLength(
+              LORA_PREAMBLE_LEN); // Restaurar preámbulo corto
           radio.standby();
           radio.sleep();
+          setScreenStatus("DURMIENDO", "Bajo consumo", "");
           return;
         }
         delayMicroseconds(200);
       }
 
       // DIO1 HIGH → hay un evento de RX.
+      radio.setPreambleLength(LORA_PREAMBLE_LEN); // Restaurar preámbulo corto
+                                                  // para operaciones normales
+      Serial.println(
+          "[CAD] Evento RX detectado. Dejando procesar al loop principal.");
+      resetActiveTimeout(); // Asegurar que no volvemos a dormir inmediatamente
       // NO llamamos handleLoRa() desde aquí para evitar confusión de estado
       // de RadioLib (el objeto radio está en modo RX activo, no en STDBY).
       // En cambio, simplemente salimos del bloque de sleep y dejamos que
       // el handleLoRa() normal al inicio del SIGUIENTE loop() lo procese.
       // DIO1 permanece HIGH (IRQs no limpiados) hasta que handleLoRa() llame
       // a radio.readData() que los limpia internamente.
-      Serial.println("[CAD] Evento RX detectado. Dejando procesar al loop principal.");
-      resetActiveTimeout();  // Asegurar que no volvemos a dormir inmediatamente
+      Serial.println(
+          "[CAD] Evento RX detectado. Dejando procesar al loop principal.");
+      resetActiveTimeout(); // Asegurar que no volvemos a dormir inmediatamente
 
     } else {
       // ── FASE 4B: Canal libre → volver a dormir ───────────────────────────
