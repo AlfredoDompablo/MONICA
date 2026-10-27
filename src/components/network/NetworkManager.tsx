@@ -111,8 +111,8 @@ export default function NetworkManager({ nodes }: { nodes: NodeInfo[] }) {
             if (logsRes.ok && commandsRes.ok) {
                 const logsData = await logsRes.json();
                 const commandsData = await commandsRes.json();
-                setLogs(logsData);
-                setCommands(commandsData);
+                setLogs(Array.isArray(logsData) ? logsData : (logsData.logs || []));
+                setCommands(Array.isArray(commandsData) ? commandsData : (commandsData.commands || []));
             }
             if (routinesRes.ok) {
                 const routinesData = await routinesRes.json();

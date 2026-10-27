@@ -83,11 +83,14 @@ model WasteDetection {
 /// Modelo de Log de Red
 /// Registra eventos operativos, advertencias y errores del concentrador remoto.
 model NetworkLog {
-  log_id    Int      @id @default(autoincrement())
-  timestamp DateTime @default(now()) @db.Timestamp(6)
-  level     String   @db.VarChar(20) // 'INFO', 'WARNING', 'ERROR', 'SUCCESS'
-  message   String   @db.Text
-  node_id   String?  @db.VarChar(20)
+  log_id          Int       @id @default(autoincrement())
+  timestamp       DateTime  @default(now()) @db.Timestamp(6)
+  level           String    @db.VarChar(20) // 'INFO', 'WARNING', 'ERROR', 'SUCCESS'
+  message         String    @db.Text
+  node_id         String?   @db.VarChar(20)
+  is_read         Boolean   @default(false)
+  acknowledged_at DateTime? @db.Timestamp(6)
+  acknowledged_by String?   @db.VarChar(100)
 
   @@map("network_logs")
 }

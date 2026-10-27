@@ -59,3 +59,13 @@ firmware_concentrator/include/secrets.h
 ai_service/debug_image.jpg
 scripts/cleanup_photos.ts
 scripts/upload_photo.ts
+scratch/
+*.log
+
+# PlatformIO Compilation Databases
+**/compile_commands.json
+
+# Auxiliary test scripts
+src/scripts/check_commands_pg.ts
+src/scripts/read_db.ts
+src/scripts/test_pg.ts

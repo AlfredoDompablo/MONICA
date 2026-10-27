@@ -19,7 +19,7 @@ export default withAuth(
             return NextResponse.next();
         }
 
-        const isModification = method === "POST" || method === "PUT" || method === "DELETE";
+        const isModification = method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH";
 
         // Protección para endpoints de Red/Comandos
         if (path.startsWith("/api/network")) {
